@@ -559,8 +559,11 @@ class OpenWebUIAnalyzer:
                        (not chat_feedback_type.get(cid, {}).get('up') and not chat_feedback_type.get(cid, {}).get('down')))
             user_totals[user_id] = {'total': total, 'no_fb': no_fb}
 
-        # Sort users by total chats
-        sorted_users = sorted(user_all_chats.keys(), key=lambda u: -user_totals[u]['total'])
+        # Sort users by total chats, filter to users with meaningful activity (5+ chats)
+        sorted_users = sorted(
+            [u for u in user_all_chats.keys() if user_totals[u]['total'] >= 5],
+            key=lambda u: -user_totals[u]['total']
+        )
 
         # Print header with months (compact format: rate% up/dn)
         month_labels = sorted_months[-6:]  # Last 6 months
@@ -614,7 +617,10 @@ class OpenWebUIAnalyzer:
 
             print(row_str)
 
-        print("\n(Rate = compliance %, 👍/👎 = thumbs up/down counts, '--' = no chats)")
+        # Note about filter
+        minor_user_count = len(user_all_chats) - len(sorted_users)
+        filter_note = f", {minor_user_count} users with <5 chats not shown" if minor_user_count > 0 else ""
+        print(f"\n(Rate = compliance %, 👍/👎 = thumbs up/down counts, '--' = no chats{filter_note})")
 
         # Also show summary table
         print("\n" + "-" * 75)
@@ -652,14 +658,20 @@ class OpenWebUIAnalyzer:
                 'rate': compliance
             })
 
+        # Filter to users with 5+ chats and sort
+        user_compliance = [u for u in user_compliance if u['total'] >= 5]
         user_compliance.sort(key=lambda x: -x['total'])
 
         print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
         print("-" * 75)
-        summary_limit = len(user_compliance) if len(user_compliance) <= 10 else 10
-        for u in user_compliance[:summary_limit]:
+        for u in user_compliance:
             name = u['name'][:24] if u['name'] else '(unknown)'
             print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
+
+        # Show count of minor users
+        minor_users = len(user_all_chats) - len(user_compliance)
+        if minor_users > 0:
+            print(f"\n({minor_users} users with <5 chats not shown)")
 
         print()
 
