@@ -14,11 +14,13 @@ Commands:
     models      - Model usage statistics
     feedback    - Thumbs up/down feedback statistics
     verify      - Verify data accuracy with cross-checks and samples
+    compare     - Compare DB against Open WebUI JSON export (requires --export-file)
     export      - Export chat data to JSON
 
 Options:
     --all           Show all users (default: hide users with <500 chats)
     --min-chats N   Minimum chats to show user (default: 500)
+    --export-file   Path to Open WebUI feedback JSON export (for compare command)
 """
 
 import sqlite3
@@ -872,6 +874,123 @@ class OpenWebUIAnalyzer:
         print("Verification complete. Review sample data to confirm rating parsing.")
         print("=" * 70)
 
+    def compare_export(self, export_path: str):
+        """Compare database analysis against Open WebUI JSON export for verification."""
+        print("=" * 70)
+        print("VERIFICATION: Database vs Open WebUI Export")
+        print("=" * 70)
+
+        # Load exported JSON
+        try:
+            with open(export_path, 'r', encoding='utf-8') as f:
+                export_data = json.load(f)
+        except FileNotFoundError:
+            print(f"Error: Export file not found: {export_path}")
+            return
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in export file: {e}")
+            return
+
+        if not isinstance(export_data, list):
+            print("Error: Export file should contain a JSON array")
+            return
+
+        print(f"\nExport file: {export_path}")
+        print(f"Records in export: {len(export_data):,}")
+
+        # Count from export (using data.rating: 1 = up, -1 = down)
+        export_up = 0
+        export_down = 0
+        export_other = 0
+        export_chat_ids = set()
+
+        for record in export_data:
+            data = record.get('data', {})
+            meta = record.get('meta', {})
+            rating = data.get('rating')
+
+            if rating == 1:
+                export_up += 1
+            elif rating == -1:
+                export_down += 1
+            else:
+                export_other += 1
+
+            chat_id = meta.get('chat_id')
+            if chat_id:
+                export_chat_ids.add(chat_id)
+
+        # Count from database
+        self.cursor.execute("SELECT COUNT(*) as count FROM feedback")
+        db_total = self.cursor.fetchone()['count']
+
+        self.cursor.execute("SELECT data, meta FROM feedback")
+        db_up = 0
+        db_down = 0
+        db_other = 0
+        db_chat_ids = set()
+
+        for row in self.cursor.fetchall():
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                meta = json.loads(row['meta']) if row['meta'] else {}
+                rating = data.get('rating')
+
+                # Match export logic: 1 = up, -1 = down
+                if rating == 1:
+                    db_up += 1
+                elif rating == -1:
+                    db_down += 1
+                else:
+                    db_other += 1
+
+                chat_id = meta.get('chat_id')
+                if chat_id:
+                    db_chat_ids.add(chat_id)
+            except (json.JSONDecodeError, TypeError):
+                db_other += 1
+
+        # Comparison table
+        print("\n" + "-" * 70)
+        print("COMPARISON")
+        print("-" * 70)
+        print(f"{'Metric':<30} {'Export':>12} {'Database':>12} {'Match':>10}")
+        print("-" * 70)
+
+        def check(name, exp_val, db_val):
+            match = "✓" if exp_val == db_val else f"✗ (diff: {db_val - exp_val:+d})"
+            print(f"{name:<30} {exp_val:>12,} {db_val:>12,} {match:>10}")
+            return exp_val == db_val
+
+        all_match = True
+        all_match &= check("Total records", len(export_data), db_total)
+        all_match &= check("Thumbs up (rating=1)", export_up, db_up)
+        all_match &= check("Thumbs down (rating=-1)", export_down, db_down)
+        all_match &= check("Other/null ratings", export_other, db_other)
+        all_match &= check("Unique chat IDs", len(export_chat_ids), len(db_chat_ids))
+
+        print("-" * 70)
+
+        if all_match:
+            print("\n✓ ALL METRICS MATCH - Database analysis is accurate!")
+        else:
+            print("\n⚠️  SOME METRICS DON'T MATCH - Review differences above")
+            print("\nPossible reasons for mismatch:")
+            print("  - Export was filtered by date range")
+            print("  - Database has newer records since export")
+            print("  - Export is from a different database")
+
+        # Show any IDs in export but not in database
+        missing_in_db = export_chat_ids - db_chat_ids
+        if missing_in_db:
+            print(f"\n⚠️  {len(missing_in_db)} chat IDs in export not found in database feedback")
+
+        extra_in_db = db_chat_ids - export_chat_ids
+        if extra_in_db:
+            print(f"\n📝 {len(extra_in_db)} chat IDs in database not in export (newer records?)")
+
+        print()
+
     def _parse_timestamp(self, ts) -> datetime | None:
         """Parse timestamp (could be seconds or nanoseconds)."""
         if not ts:
@@ -905,18 +1024,20 @@ Commands:
   models    - Model usage statistics
   feedback  - Thumbs up/down feedback statistics
   verify    - Verify data accuracy with cross-checks
+  compare   - Compare DB against Open WebUI JSON export
   export    - Export chat data to JSON
   all       - Run all analyses
 """
     )
     parser.add_argument('db_path', help='Path to webui.db file')
     parser.add_argument('command', nargs='?', default='summary',
-                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'verify', 'export', 'all'],
+                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'verify', 'compare', 'export', 'all'],
                         help='Command to run (default: summary)')
     parser.add_argument('--all-users', '-a', action='store_true',
                         help='Show all users (default: hide users with <500 chats)')
     parser.add_argument('--min-chats', '-m', type=int, default=DEFAULT_MIN_CHATS,
                         help=f'Minimum chats to show user (default: {DEFAULT_MIN_CHATS})')
+    parser.add_argument('--export-file', '-e', help='Open WebUI feedback JSON export (for compare command)')
     parser.add_argument('--output', '-o', help='Output file for export command')
 
     args = parser.parse_args()
@@ -941,6 +1062,12 @@ Commands:
                 analyzer.feedback_stats(min_chats=min_chats)
             elif args.command == 'verify':
                 analyzer.verify()
+            elif args.command == 'compare':
+                if not args.export_file:
+                    print("Error: --export-file (-e) required for compare command")
+                    print("Usage: python analyzer.py webui.db compare -e feedback_export.json")
+                    sys.exit(1)
+                analyzer.compare_export(args.export_file)
             elif args.command == 'export':
                 analyzer.export_chats(args.output)
             elif args.command == 'all':
