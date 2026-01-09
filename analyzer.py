@@ -512,21 +512,35 @@ class OpenWebUIAnalyzer:
             compliance = (with_fb / total_month_chats * 100) if total_month_chats > 0 else 0
             print(f"{month:<10} {total_month_chats:>7} {no_fb_count:>7} {up_count:>6} {down_count:>6} {compliance:>7.1f}%")
 
-        # User feedback compliance
+        # User feedback compliance by month
         print("\n" + "-" * 75)
-        print("USER FEEDBACK COMPLIANCE")
+        print("USER FEEDBACK COMPLIANCE BY MONTH")
         print("-" * 75)
 
-        # Get chats per user
+        # Get chats per user with month
         self.cursor.execute("""
-            SELECT user_id, id as chat_id FROM chat
+            SELECT user_id, id as chat_id, created_at FROM chat
         """)
-        user_chats = defaultdict(list)
+        # Structure: user_id -> month -> [chat_ids]
+        user_month_chats = defaultdict(lambda: defaultdict(list))
+        user_all_chats = defaultdict(list)
+        all_user_months = set()
+
         for row in self.cursor.fetchall():
-            user_chats[row['user_id']].append(row['chat_id'])
+            user_id = row['user_id']
+            chat_id = row['chat_id']
+            user_all_chats[user_id].append(chat_id)
+
+            ts = row['created_at']
+            if ts:
+                dt = self._parse_timestamp(ts)
+                if dt:
+                    month_key = dt.strftime('%Y-%m')
+                    user_month_chats[user_id][month_key].append(chat_id)
+                    all_user_months.add(month_key)
 
         # Get user names
-        all_user_ids = list(user_chats.keys())
+        all_user_ids = list(user_all_chats.keys())
         user_names = {}
         if all_user_ids:
             placeholders = ','.join('?' * len(all_user_ids))
@@ -534,9 +548,58 @@ class OpenWebUIAnalyzer:
             for row in self.cursor.fetchall():
                 user_names[row['id']] = row['name'] or row['email'] or row['id']
 
-        # Calculate compliance per user
+        # Sort months
+        sorted_months = sorted(all_user_months)
+
+        # Calculate overall compliance per user (for sorting)
+        user_totals = {}
+        for user_id, chat_ids in user_all_chats.items():
+            total = len(chat_ids)
+            no_fb = sum(1 for cid in chat_ids if not chat_feedback_type.get(cid) or
+                       (not chat_feedback_type.get(cid, {}).get('up') and not chat_feedback_type.get(cid, {}).get('down')))
+            user_totals[user_id] = {'total': total, 'no_fb': no_fb}
+
+        # Sort users by total chats
+        sorted_users = sorted(user_all_chats.keys(), key=lambda u: -user_totals[u]['total'])
+
+        # Print header with months
+        month_labels = [m[-5:] for m in sorted_months[-6:]]  # Last 6 months, show as "MM-YY" style
+        header = f"{'User':<20} {'Total':>6}"
+        for m in sorted_months[-6:]:
+            header += f" {m[-5:]:>7}"
+        print(header)
+        print("-" * (28 + 8 * len(sorted_months[-6:])))
+
+        # Print each user's monthly compliance rates
+        for user_id in sorted_users[:15]:  # Top 15 users
+            name = user_names.get(user_id, user_id or '(unknown)')
+            name = name[:19] if name else '(unknown)'
+            total = user_totals[user_id]['total']
+
+            row_str = f"{name:<20} {total:>6}"
+
+            for month in sorted_months[-6:]:
+                month_chat_ids = user_month_chats[user_id].get(month, [])
+                if not month_chat_ids:
+                    row_str += f" {'--':>7}"
+                else:
+                    month_total = len(month_chat_ids)
+                    month_no_fb = sum(1 for cid in month_chat_ids if not chat_feedback_type.get(cid) or
+                                     (not chat_feedback_type.get(cid, {}).get('up') and not chat_feedback_type.get(cid, {}).get('down')))
+                    month_rate = ((month_total - month_no_fb) / month_total * 100) if month_total > 0 else 0
+                    row_str += f" {month_rate:>6.0f}%"
+
+            print(row_str)
+
+        print("\n(showing compliance rate % per month, '--' = no chats that month)")
+
+        # Also show summary table
+        print("\n" + "-" * 75)
+        print("USER FEEDBACK SUMMARY (All Time)")
+        print("-" * 75)
+
         user_compliance = []
-        for user_id, chat_ids in user_chats.items():
+        for user_id, chat_ids in user_all_chats.items():
             total_user_chats = len(chat_ids)
             up_count = 0
             down_count = 0
@@ -566,30 +629,13 @@ class OpenWebUIAnalyzer:
                 'rate': compliance
             })
 
-        # Sort by total chats descending
         user_compliance.sort(key=lambda x: -x['total'])
 
         print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
         print("-" * 75)
-        for u in user_compliance[:20]:  # Top 20 users
+        for u in user_compliance[:15]:
             name = u['name'][:24] if u['name'] else '(unknown)'
             print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
-
-        # Show users with lowest compliance (if more than 5 users)
-        if len(user_compliance) > 5:
-            low_compliance = [u for u in user_compliance if u['total'] >= 5]  # At least 5 chats
-            low_compliance.sort(key=lambda x: x['rate'])
-            low_compliance = low_compliance[:5]
-
-            if low_compliance and low_compliance[0]['rate'] < 100:
-                print("\n" + "-" * 75)
-                print("LOWEST COMPLIANCE (min 5 chats)")
-                print("-" * 75)
-                print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
-                print("-" * 75)
-                for u in low_compliance:
-                    name = u['name'][:24] if u['name'] else '(unknown)'
-                    print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
 
         print()
 
