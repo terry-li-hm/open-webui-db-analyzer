@@ -512,28 +512,84 @@ class OpenWebUIAnalyzer:
             compliance = (with_fb / total_month_chats * 100) if total_month_chats > 0 else 0
             print(f"{month:<10} {total_month_chats:>7} {no_fb_count:>7} {up_count:>6} {down_count:>6} {compliance:>7.1f}%")
 
-        # Top users giving feedback
-        if by_user:
-            print("\n" + "-" * 50)
-            print("TOP FEEDBACK PROVIDERS")
-            print("-" * 50)
+        # User feedback compliance
+        print("\n" + "-" * 75)
+        print("USER FEEDBACK COMPLIANCE")
+        print("-" * 75)
 
-            # Get user names
-            user_ids = list(by_user.keys())
-            user_names = {}
-            if user_ids:
-                placeholders = ','.join('?' * len(user_ids))
-                self.cursor.execute(f"SELECT id, name, email FROM user WHERE id IN ({placeholders})", user_ids)
-                for row in self.cursor.fetchall():
-                    user_names[row['id']] = row['name'] or row['email'] or row['id']
+        # Get chats per user
+        self.cursor.execute("""
+            SELECT user_id, id as chat_id FROM chat
+        """)
+        user_chats = defaultdict(list)
+        for row in self.cursor.fetchall():
+            user_chats[row['user_id']].append(row['chat_id'])
 
-            print(f"{'User':<30} {'👍':>6} {'👎':>6} {'Total':>6}")
-            print("-" * 50)
-            sorted_users = sorted(by_user.items(), key=lambda x: -(x[1]['up'] + x[1]['down']))[:10]
-            for user_id, counts in sorted_users:
-                name = user_names.get(user_id, user_id)[:29]
-                total = counts['up'] + counts['down']
-                print(f"{name:<30} {counts['up']:>6} {counts['down']:>6} {total:>6}")
+        # Get user names
+        all_user_ids = list(user_chats.keys())
+        user_names = {}
+        if all_user_ids:
+            placeholders = ','.join('?' * len(all_user_ids))
+            self.cursor.execute(f"SELECT id, name, email FROM user WHERE id IN ({placeholders})", all_user_ids)
+            for row in self.cursor.fetchall():
+                user_names[row['id']] = row['name'] or row['email'] or row['id']
+
+        # Calculate compliance per user
+        user_compliance = []
+        for user_id, chat_ids in user_chats.items():
+            total_user_chats = len(chat_ids)
+            up_count = 0
+            down_count = 0
+            no_fb_count = 0
+
+            for chat_id in chat_ids:
+                fb = chat_feedback_type.get(chat_id)
+                if fb:
+                    if fb['up']:
+                        up_count += 1
+                    if fb['down']:
+                        down_count += 1
+                    if not fb['up'] and not fb['down']:
+                        no_fb_count += 1
+                else:
+                    no_fb_count += 1
+
+            with_fb = total_user_chats - no_fb_count
+            compliance = (with_fb / total_user_chats * 100) if total_user_chats > 0 else 0
+            user_compliance.append({
+                'user_id': user_id,
+                'name': user_names.get(user_id, user_id or '(unknown)'),
+                'total': total_user_chats,
+                'no_fb': no_fb_count,
+                'up': up_count,
+                'down': down_count,
+                'rate': compliance
+            })
+
+        # Sort by total chats descending
+        user_compliance.sort(key=lambda x: -x['total'])
+
+        print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
+        print("-" * 75)
+        for u in user_compliance[:20]:  # Top 20 users
+            name = u['name'][:24] if u['name'] else '(unknown)'
+            print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
+
+        # Show users with lowest compliance (if more than 5 users)
+        if len(user_compliance) > 5:
+            low_compliance = [u for u in user_compliance if u['total'] >= 5]  # At least 5 chats
+            low_compliance.sort(key=lambda x: x['rate'])
+            low_compliance = low_compliance[:5]
+
+            if low_compliance and low_compliance[0]['rate'] < 100:
+                print("\n" + "-" * 75)
+                print("LOWEST COMPLIANCE (min 5 chats)")
+                print("-" * 75)
+                print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
+                print("-" * 75)
+                for u in low_compliance:
+                    name = u['name'][:24] if u['name'] else '(unknown)'
+                    print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
 
         print()
 
