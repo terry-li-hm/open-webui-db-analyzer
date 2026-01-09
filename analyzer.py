@@ -317,6 +317,10 @@ class OpenWebUIAnalyzer:
             print("No feedback data to analyze.")
             return
 
+        # Get total chat count for comparison
+        self.cursor.execute("SELECT COUNT(*) as count FROM chat")
+        total_chats = self.cursor.fetchone()['count']
+
         # Analyze feedback data
         self.cursor.execute("SELECT id, user_id, data, meta, created_at FROM feedback")
 
@@ -326,11 +330,17 @@ class OpenWebUIAnalyzer:
         by_model = defaultdict(lambda: {'up': 0, 'down': 0})
         by_user = defaultdict(lambda: {'up': 0, 'down': 0})
         monthly = defaultdict(lambda: {'up': 0, 'down': 0})
+        chats_with_feedback = set()
 
         for row in self.cursor.fetchall():
             try:
                 data = json.loads(row['data']) if row['data'] else {}
                 meta = json.loads(row['meta']) if row['meta'] else {}
+
+                # Track chat_id from meta
+                chat_id = meta.get('chat_id')
+                if chat_id:
+                    chats_with_feedback.add(chat_id)
 
                 # Extract rating - can be in different formats
                 rating = data.get('rating')
@@ -397,6 +407,18 @@ class OpenWebUIAnalyzer:
         if total_rated > 0:
             satisfaction = (thumbs_up / total_rated) * 100
             print(f"\n📊 Satisfaction Rate: {satisfaction:.1f}%")
+
+        # Chat feedback coverage
+        chats_with_fb = len(chats_with_feedback)
+        chats_without_fb = total_chats - chats_with_fb
+        coverage_pct = (chats_with_fb / total_chats * 100) if total_chats > 0 else 0
+
+        print("\n" + "-" * 40)
+        print("CHAT FEEDBACK COVERAGE")
+        print("-" * 40)
+        print(f"Total Chats:              {total_chats:>8,}")
+        print(f"Chats WITH feedback:      {chats_with_fb:>8,} ({coverage_pct:.1f}%)")
+        print(f"Chats WITHOUT feedback:   {chats_without_fb:>8,} ({100-coverage_pct:.1f}%)")
 
         # By model
         if by_model:
