@@ -577,7 +577,9 @@ class OpenWebUIAnalyzer:
         print("-" * (24 + 14 * len(month_labels)))
 
         # Print each user's monthly compliance rates with up/down
-        for user_id in sorted_users[:15]:  # Top 15 users
+        # Show all users if 10 or fewer, otherwise top 10
+        display_limit = len(sorted_users) if len(sorted_users) <= 10 else 10
+        for user_id in sorted_users[:display_limit]:
             name = user_names.get(user_id, user_id or '(unknown)')
             name = name[:17] if name else '(unknown)'
             total = user_totals[user_id]['total']
@@ -654,7 +656,8 @@ class OpenWebUIAnalyzer:
 
         print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
         print("-" * 75)
-        for u in user_compliance[:15]:
+        summary_limit = len(user_compliance) if len(user_compliance) <= 10 else 10
+        for u in user_compliance[:summary_limit]:
             name = u['name'][:24] if u['name'] else '(unknown)'
             print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
 
