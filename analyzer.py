@@ -13,6 +13,7 @@ Commands:
     timeline    - Chat activity over time
     models      - Model usage statistics
     feedback    - Thumbs up/down feedback statistics
+    verify      - Verify data accuracy with cross-checks and samples
     export      - Export chat data to JSON
 
 Options:
@@ -720,6 +721,157 @@ class OpenWebUIAnalyzer:
 
         print(f"Exported {len(chats)} chats to {output_path}")
 
+    def verify(self):
+        """Verify data accuracy with cross-checks and sample data."""
+        print("=" * 70)
+        print("DATA VERIFICATION")
+        print("=" * 70)
+
+        # 1. Direct SQL counts
+        print("\n1. RAW TABLE COUNTS (Direct SQL)")
+        print("-" * 50)
+
+        self.cursor.execute("SELECT COUNT(*) as count FROM chat")
+        chat_count = self.cursor.fetchone()['count']
+        print(f"   Total chats in 'chat' table:     {chat_count:,}")
+
+        self.cursor.execute("SELECT COUNT(*) as count FROM user")
+        user_count = self.cursor.fetchone()['count']
+        print(f"   Total users in 'user' table:     {user_count:,}")
+
+        self.cursor.execute("SELECT COUNT(*) as count FROM feedback")
+        feedback_count = self.cursor.fetchone()['count']
+        print(f"   Total rows in 'feedback' table:  {feedback_count:,}")
+
+        # 2. Feedback rating distribution (raw)
+        print("\n2. FEEDBACK RATING VALUES (Raw from database)")
+        print("-" * 50)
+
+        self.cursor.execute("SELECT data FROM feedback LIMIT 100")
+        rating_values = {}
+        for row in self.cursor.fetchall():
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                rating = data.get('rating')
+                rating_key = f"{type(rating).__name__}:{rating}"
+                rating_values[rating_key] = rating_values.get(rating_key, 0) + 1
+            except (json.JSONDecodeError, TypeError):
+                rating_values['(parse error)'] = rating_values.get('(parse error)', 0) + 1
+
+        print("   Rating values found (type:value -> count):")
+        for key, count in sorted(rating_values.items(), key=lambda x: -x[1]):
+            print(f"      {key}: {count}")
+
+        # 3. Sample feedback records
+        print("\n3. SAMPLE FEEDBACK RECORDS (First 5)")
+        print("-" * 50)
+
+        self.cursor.execute("""
+            SELECT f.id, f.user_id, f.data, f.meta, f.created_at, u.name as user_name
+            FROM feedback f
+            LEFT JOIN user u ON f.user_id = u.id
+            ORDER BY f.created_at DESC
+            LIMIT 5
+        """)
+
+        for i, row in enumerate(self.cursor.fetchall(), 1):
+            print(f"\n   Record {i}:")
+            print(f"      ID: {row['id'][:20]}...")
+            print(f"      User: {row['user_name'] or row['user_id']}")
+            print(f"      Created: {self._format_timestamp(row['created_at'])}")
+
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                meta = json.loads(row['meta']) if row['meta'] else {}
+                print(f"      Rating: {data.get('rating')} (type: {type(data.get('rating')).__name__})")
+                print(f"      Model: {data.get('model_id', 'N/A')}")
+                print(f"      Chat ID: {meta.get('chat_id', 'N/A')[:20] if meta.get('chat_id') else 'N/A'}...")
+            except (json.JSONDecodeError, TypeError) as e:
+                print(f"      (Error parsing: {e})")
+
+        # 4. Cross-check: chats with feedback
+        print("\n4. CROSS-CHECK: Chats with Feedback")
+        print("-" * 50)
+
+        self.cursor.execute("SELECT meta FROM feedback")
+        chat_ids_with_feedback = set()
+        for row in self.cursor.fetchall():
+            try:
+                meta = json.loads(row['meta']) if row['meta'] else {}
+                chat_id = meta.get('chat_id')
+                if chat_id:
+                    chat_ids_with_feedback.add(chat_id)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Verify these chat_ids exist in chat table
+        if chat_ids_with_feedback:
+            placeholders = ','.join('?' * min(100, len(chat_ids_with_feedback)))
+            sample_ids = list(chat_ids_with_feedback)[:100]
+            self.cursor.execute(f"SELECT COUNT(*) as count FROM chat WHERE id IN ({placeholders})", sample_ids)
+            existing = self.cursor.fetchone()['count']
+            print(f"   Unique chat IDs in feedback meta: {len(chat_ids_with_feedback):,}")
+            print(f"   Sample of {len(sample_ids)} verified in chat table: {existing} exist")
+            if existing != len(sample_ids):
+                print(f"   ⚠️  {len(sample_ids) - existing} chat IDs in feedback don't exist in chat table")
+        else:
+            print("   No chat IDs found in feedback meta")
+
+        chats_without_fb = chat_count - len(chat_ids_with_feedback)
+        print(f"   Chats without any feedback: {chats_without_fb:,}")
+
+        # 5. Consistency check
+        print("\n5. CONSISTENCY CHECK")
+        print("-" * 50)
+
+        self.cursor.execute("SELECT data FROM feedback")
+        calc_up = 0
+        calc_down = 0
+        calc_other = 0
+
+        for row in self.cursor.fetchall():
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                rating = data.get('rating')
+
+                if rating is not None:
+                    if isinstance(rating, (int, float)):
+                        if rating > 0:
+                            calc_up += 1
+                        elif rating < 0:
+                            calc_down += 1
+                        else:
+                            calc_other += 1
+                    elif isinstance(rating, str):
+                        rating_lower = rating.lower()
+                        if rating_lower in ('1', 'like', 'positive', 'up', 'good', 'yes'):
+                            calc_up += 1
+                        elif rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no'):
+                            calc_down += 1
+                        else:
+                            calc_other += 1
+                    else:
+                        calc_other += 1
+                else:
+                    calc_other += 1
+            except (json.JSONDecodeError, TypeError):
+                calc_other += 1
+
+        total_calc = calc_up + calc_down + calc_other
+        print(f"   Calculated 👍 (positive): {calc_up:,}")
+        print(f"   Calculated 👎 (negative): {calc_down:,}")
+        print(f"   Other/neutral/null:       {calc_other:,}")
+        print(f"   Total:                    {total_calc:,}")
+
+        if total_calc == feedback_count:
+            print(f"   ✓ Total matches feedback table count ({feedback_count:,})")
+        else:
+            print(f"   ⚠️  Mismatch! Expected {feedback_count:,}, got {total_calc:,}")
+
+        print("\n" + "=" * 70)
+        print("Verification complete. Review sample data to confirm rating parsing.")
+        print("=" * 70)
+
     def _parse_timestamp(self, ts) -> datetime | None:
         """Parse timestamp (could be seconds or nanoseconds)."""
         if not ts:
@@ -752,13 +904,14 @@ Commands:
   timeline  - Chat activity over time
   models    - Model usage statistics
   feedback  - Thumbs up/down feedback statistics
+  verify    - Verify data accuracy with cross-checks
   export    - Export chat data to JSON
   all       - Run all analyses
 """
     )
     parser.add_argument('db_path', help='Path to webui.db file')
     parser.add_argument('command', nargs='?', default='summary',
-                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'export', 'all'],
+                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'verify', 'export', 'all'],
                         help='Command to run (default: summary)')
     parser.add_argument('--all-users', '-a', action='store_true',
                         help='Show all users (default: hide users with <500 chats)')
@@ -786,6 +939,8 @@ Commands:
                 analyzer.model_usage()
             elif args.command == 'feedback':
                 analyzer.feedback_stats(min_chats=min_chats)
+            elif args.command == 'verify':
+                analyzer.verify()
             elif args.command == 'export':
                 analyzer.export_chats(args.output)
             elif args.command == 'all':
