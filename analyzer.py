@@ -432,18 +432,85 @@ class OpenWebUIAnalyzer:
                 rate = (counts['up'] / total * 100) if total > 0 else 0
                 print(f"{model[:34]:<35} {counts['up']:>6} {counts['down']:>6} {rate:>7.1f}%")
 
-        # By month
-        if monthly:
-            print("\n" + "-" * 50)
-            print("FEEDBACK BY MONTH")
-            print("-" * 50)
-            print(f"{'Month':<10} {'👍':>6} {'👎':>6} {'Rate':>8}")
-            print("-" * 32)
-            for month in sorted(monthly.keys()):
-                counts = monthly[month]
-                total = counts['up'] + counts['down']
-                rate = (counts['up'] / total * 100) if total > 0 else 0
-                print(f"{month:<10} {counts['up']:>6} {counts['down']:>6} {rate:>7.1f}%")
+        # By month - with no feedback tracking
+        # First, get all chats grouped by month with their feedback status
+        self.cursor.execute("SELECT id, created_at FROM chat")
+        chats_by_month = defaultdict(lambda: {'total': 0, 'ids': []})
+        for row in self.cursor.fetchall():
+            ts = row['created_at']
+            if ts:
+                dt = self._parse_timestamp(ts)
+                if dt:
+                    month_key = dt.strftime('%Y-%m')
+                    chats_by_month[month_key]['total'] += 1
+                    chats_by_month[month_key]['ids'].append(row['id'])
+
+        # Build feedback lookup: chat_id -> {'up': bool, 'down': bool}
+        chat_feedback_type = {}
+        self.cursor.execute("SELECT data, meta FROM feedback")
+        for row in self.cursor.fetchall():
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                meta = json.loads(row['meta']) if row['meta'] else {}
+                chat_id = meta.get('chat_id')
+                if not chat_id:
+                    continue
+
+                rating = data.get('rating')
+                is_positive = False
+                is_negative = False
+
+                if rating is not None:
+                    if isinstance(rating, (int, float)):
+                        is_positive = rating > 0
+                        is_negative = rating < 0
+                    elif isinstance(rating, str):
+                        rating_lower = rating.lower()
+                        is_positive = rating_lower in ('1', 'like', 'positive', 'up', 'good', 'yes')
+                        is_negative = rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no')
+
+                if chat_id not in chat_feedback_type:
+                    chat_feedback_type[chat_id] = {'up': False, 'down': False}
+                if is_positive:
+                    chat_feedback_type[chat_id]['up'] = True
+                if is_negative:
+                    chat_feedback_type[chat_id]['down'] = True
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Calculate monthly stats with no-feedback count
+        print("\n" + "-" * 65)
+        print("MONTHLY FEEDBACK COMPLIANCE")
+        print("-" * 65)
+        print(f"{'Month':<10} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
+        print("-" * 65)
+
+        all_months = sorted(set(chats_by_month.keys()) | set(monthly.keys()))
+        for month in all_months:
+            month_chats = chats_by_month.get(month, {'total': 0, 'ids': []})
+            total_month_chats = month_chats['total']
+
+            # Count feedback types for this month's chats
+            up_count = 0
+            down_count = 0
+            no_fb_count = 0
+
+            for chat_id in month_chats['ids']:
+                fb = chat_feedback_type.get(chat_id)
+                if fb:
+                    if fb['up']:
+                        up_count += 1
+                    if fb['down']:
+                        down_count += 1
+                    if not fb['up'] and not fb['down']:
+                        no_fb_count += 1
+                else:
+                    no_fb_count += 1
+
+            # Compliance rate = chats with any feedback / total chats
+            with_fb = total_month_chats - no_fb_count
+            compliance = (with_fb / total_month_chats * 100) if total_month_chats > 0 else 0
+            print(f"{month:<10} {total_month_chats:>7} {no_fb_count:>7} {up_count:>6} {down_count:>6} {compliance:>7.1f}%")
 
         # Top users giving feedback
         if by_user:
