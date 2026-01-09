@@ -12,6 +12,7 @@ Commands:
     users       - User statistics
     timeline    - Chat activity over time
     models      - Model usage statistics
+    feedback    - Thumbs up/down feedback statistics
     export      - Export chat data to JSON
 """
 
@@ -292,6 +293,161 @@ class OpenWebUIAnalyzer:
             print(f"{model[:49]:<50} {count:>10,}")
         print()
 
+    def feedback_stats(self):
+        """Analyze thumbs up/down feedback statistics."""
+        print("=" * 60)
+        print("FEEDBACK ANALYSIS (Thumbs Up/Down)")
+        print("=" * 60)
+
+        # Check if feedback table exists
+        self.cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='feedback'
+        """)
+        if not self.cursor.fetchone():
+            print("\nNo feedback table found in database.")
+            return
+
+        # Total feedback count
+        self.cursor.execute("SELECT COUNT(*) as count FROM feedback")
+        total_feedback = self.cursor.fetchone()['count']
+        print(f"\nTotal Feedback Entries: {total_feedback:,}")
+
+        if total_feedback == 0:
+            print("No feedback data to analyze.")
+            return
+
+        # Analyze feedback data
+        self.cursor.execute("SELECT id, user_id, data, meta, created_at FROM feedback")
+
+        thumbs_up = 0
+        thumbs_down = 0
+        neutral = 0
+        by_model = defaultdict(lambda: {'up': 0, 'down': 0})
+        by_user = defaultdict(lambda: {'up': 0, 'down': 0})
+        monthly = defaultdict(lambda: {'up': 0, 'down': 0})
+
+        for row in self.cursor.fetchall():
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                meta = json.loads(row['meta']) if row['meta'] else {}
+
+                # Extract rating - can be in different formats
+                rating = data.get('rating')
+
+                # Determine if positive or negative
+                is_positive = False
+                is_negative = False
+
+                if rating is not None:
+                    if isinstance(rating, (int, float)):
+                        if rating > 0:
+                            is_positive = True
+                        elif rating < 0:
+                            is_negative = True
+                    elif isinstance(rating, str):
+                        rating_lower = rating.lower()
+                        if rating_lower in ('1', 'like', 'positive', 'up', 'good', 'yes'):
+                            is_positive = True
+                        elif rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no'):
+                            is_negative = True
+
+                if is_positive:
+                    thumbs_up += 1
+                elif is_negative:
+                    thumbs_down += 1
+                else:
+                    neutral += 1
+
+                # Track by model
+                model_id = data.get('model_id', '(unknown)')
+                if is_positive:
+                    by_model[model_id]['up'] += 1
+                elif is_negative:
+                    by_model[model_id]['down'] += 1
+
+                # Track by user
+                user_id = row['user_id'] or '(unknown)'
+                if is_positive:
+                    by_user[user_id]['up'] += 1
+                elif is_negative:
+                    by_user[user_id]['down'] += 1
+
+                # Track by month
+                ts = row['created_at']
+                if ts:
+                    dt = self._parse_timestamp(ts)
+                    if dt:
+                        month_key = dt.strftime('%Y-%m')
+                        if is_positive:
+                            monthly[month_key]['up'] += 1
+                        elif is_negative:
+                            monthly[month_key]['down'] += 1
+
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Summary
+        print(f"\n👍 Thumbs Up:   {thumbs_up:,}")
+        print(f"👎 Thumbs Down: {thumbs_down:,}")
+        if neutral > 0:
+            print(f"➖ Neutral/Other: {neutral:,}")
+
+        total_rated = thumbs_up + thumbs_down
+        if total_rated > 0:
+            satisfaction = (thumbs_up / total_rated) * 100
+            print(f"\n📊 Satisfaction Rate: {satisfaction:.1f}%")
+
+        # By model
+        if by_model:
+            print("\n" + "-" * 50)
+            print("FEEDBACK BY MODEL")
+            print("-" * 50)
+            print(f"{'Model':<35} {'👍':>6} {'👎':>6} {'Rate':>8}")
+            print("-" * 57)
+            for model, counts in sorted(by_model.items(), key=lambda x: -(x[1]['up'] + x[1]['down'])):
+                total = counts['up'] + counts['down']
+                rate = (counts['up'] / total * 100) if total > 0 else 0
+                print(f"{model[:34]:<35} {counts['up']:>6} {counts['down']:>6} {rate:>7.1f}%")
+
+        # By month
+        if monthly:
+            print("\n" + "-" * 50)
+            print("FEEDBACK BY MONTH")
+            print("-" * 50)
+            print(f"{'Month':<10} {'👍':>6} {'👎':>6} {'Rate':>8}")
+            print("-" * 32)
+            for month in sorted(monthly.keys()):
+                counts = monthly[month]
+                total = counts['up'] + counts['down']
+                rate = (counts['up'] / total * 100) if total > 0 else 0
+                print(f"{month:<10} {counts['up']:>6} {counts['down']:>6} {rate:>7.1f}%")
+
+        # Top users giving feedback
+        if by_user:
+            print("\n" + "-" * 50)
+            print("TOP FEEDBACK PROVIDERS")
+            print("-" * 50)
+
+            # Get user names
+            user_ids = list(by_user.keys())
+            user_names = {}
+            if user_ids:
+                placeholders = ','.join('?' * len(user_ids))
+                self.cursor.execute(f"SELECT id, name, email FROM user WHERE id IN ({placeholders})", user_ids)
+                for row in self.cursor.fetchall():
+                    user_names[row['id']] = row['name'] or row['email'] or row['id']
+
+            print(f"{'User':<30} {'👍':>6} {'👎':>6} {'Total':>6}")
+            print("-" * 50)
+            sorted_users = sorted(by_user.items(), key=lambda x: -(x[1]['up'] + x[1]['down']))[:10]
+            for user_id, counts in sorted_users:
+                name = user_names.get(user_id, user_id)[:29]
+                total = counts['up'] + counts['down']
+                print(f"{name:<30} {counts['up']:>6} {counts['down']:>6} {total:>6}")
+
+        print()
+
     def export_chats(self, output_path: str = None):
         """Export all chats to JSON."""
         if output_path is None:
@@ -370,6 +526,8 @@ def main():
                 analyzer.timeline()
             elif command == 'models':
                 analyzer.model_usage()
+            elif command == 'feedback':
+                analyzer.feedback_stats()
             elif command == 'export':
                 output = sys.argv[3] if len(sys.argv) > 3 else None
                 analyzer.export_chats(output)
@@ -379,6 +537,7 @@ def main():
                 analyzer.user_stats()
                 analyzer.timeline()
                 analyzer.model_usage()
+                analyzer.feedback_stats()
             else:
                 print(f"Unknown command: {command}")
                 print(__doc__)
