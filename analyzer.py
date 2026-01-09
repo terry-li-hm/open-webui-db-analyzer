@@ -132,12 +132,12 @@ class OpenWebUIAnalyzer:
             LIMIT 20
         """)
         rows = self.cursor.fetchall()
-        print(f"{'User':<30} {'Email':<30} {'Chats':>8}")
-        print("-" * 70)
+        print(f"{'User':<40} {'Email':<30} {'Chats':>8}")
+        print("-" * 80)
         for row in rows:
             name = row['name'] or 'Unknown'
             email = row['email'] or 'N/A'
-            print(f"{name[:29]:<30} {email[:29]:<30} {row['chat_count']:>8,}")
+            print(f"{name[:39]:<40} {email[:29]:<30} {row['chat_count']:>8,}")
 
         # Message counts (from chat JSON)
         print("\n" + "-" * 40)
@@ -205,12 +205,12 @@ class OpenWebUIAnalyzer:
             ORDER BY last_active_at DESC
             LIMIT 15
         """)
-        print(f"{'Name':<20} {'Role':<10} {'Chats':>6} {'Last Active':<20}")
-        print("-" * 60)
+        print(f"{'Name':<40} {'Role':<10} {'Chats':>6} {'Last Active':<20}")
+        print("-" * 80)
         for row in self.cursor.fetchall():
-            name = (row['name'] or 'Unknown')[:19]
+            name = (row['name'] or 'Unknown')[:39]
             last_active = self._format_timestamp(row['last_active_at'])
-            print(f"{name:<20} {row['role']:<10} {row['chat_count']:>6} {last_active:<20}")
+            print(f"{name:<40} {row['role']:<10} {row['chat_count']:>6} {last_active:<20}")
         print()
 
     def timeline(self):
@@ -575,27 +575,27 @@ class OpenWebUIAnalyzer:
 
         # Print header with months (compact format: rate% up/dn)
         month_labels = sorted_months[-6:]  # Last 6 months
-        header = f"{'User':<18} {'Tot':>4}"
+        header = f"{'User':<35} {'Tot':>4}"
         for m in month_labels:
             header += f" {m[-5:]:^13}"
         print(header)
 
         # Sub-header for columns
-        sub_header = f"{'':<18} {'':>4}"
+        sub_header = f"{'':<35} {'':>4}"
         for _ in month_labels:
             sub_header += f" {'Rate  👍/👎':^13}"
         print(sub_header)
-        print("-" * (24 + 14 * len(month_labels)))
+        print("-" * (41 + 14 * len(month_labels)))
 
         # Print each user's monthly compliance rates with up/down
         # Show all users if 10 or fewer, otherwise top 10
         display_limit = len(sorted_users) if len(sorted_users) <= 10 else 10
         for user_id in sorted_users[:display_limit]:
             name = user_names.get(user_id, user_id or '(unknown)')
-            name = name[:17] if name else '(unknown)'
+            name = name[:34] if name else '(unknown)'
             total = user_totals[user_id]['total']
 
-            row_str = f"{name:<18} {total:>4}"
+            row_str = f"{name:<35} {total:>4}"
 
             for month in month_labels:
                 month_chat_ids = user_month_chats[user_id].get(month, [])
@@ -671,11 +671,11 @@ class OpenWebUIAnalyzer:
         user_compliance = [u for u in user_compliance if u['total'] >= min_chats]
         user_compliance.sort(key=lambda x: -x['total'])
 
-        print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
-        print("-" * 75)
+        print(f"{'User':<40} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
+        print("-" * 90)
         for u in user_compliance:
-            name = u['name'][:24] if u['name'] else '(unknown)'
-            print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
+            name = u['name'][:39] if u['name'] else '(unknown)'
+            print(f"{name:<40} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
 
         # Show count of minor users
         minor_users = all_user_count - len(user_compliance)
