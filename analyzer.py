@@ -4,7 +4,7 @@ Open WebUI Database Analyzer
 Analyzes webui.db SQLite database from Open WebUI (tested with v0.6.30)
 
 Usage:
-    python analyzer.py <path_to_webui.db> [command]
+    python analyzer.py <path_to_webui.db> [command] [options]
 
 Commands:
     summary     - Overview of all tables and record counts (default)
@@ -14,15 +14,23 @@ Commands:
     models      - Model usage statistics
     feedback    - Thumbs up/down feedback statistics
     export      - Export chat data to JSON
+
+Options:
+    --all           Show all users (default: hide users with <500 chats)
+    --min-chats N   Minimum chats to show user (default: 500)
 """
 
 import sqlite3
 import json
 import sys
 import os
+import argparse
 from datetime import datetime
 from collections import defaultdict
 from pathlib import Path
+
+# Default minimum chats to display a user
+DEFAULT_MIN_CHATS = 500
 
 
 class OpenWebUIAnalyzer:
@@ -293,7 +301,7 @@ class OpenWebUIAnalyzer:
             print(f"{model[:49]:<50} {count:>10,}")
         print()
 
-    def feedback_stats(self):
+    def feedback_stats(self, min_chats: int = DEFAULT_MIN_CHATS):
         """Analyze thumbs up/down feedback statistics."""
         print("=" * 60)
         print("FEEDBACK ANALYSIS (Thumbs Up/Down)")
@@ -559,9 +567,9 @@ class OpenWebUIAnalyzer:
                        (not chat_feedback_type.get(cid, {}).get('up') and not chat_feedback_type.get(cid, {}).get('down')))
             user_totals[user_id] = {'total': total, 'no_fb': no_fb}
 
-        # Sort users by total chats, filter to users with meaningful activity (5+ chats)
+        # Sort users by total chats, filter to users with meaningful activity
         sorted_users = sorted(
-            [u for u in user_all_chats.keys() if user_totals[u]['total'] >= 5],
+            [u for u in user_all_chats.keys() if user_totals[u]['total'] >= min_chats],
             key=lambda u: -user_totals[u]['total']
         )
 
@@ -619,7 +627,7 @@ class OpenWebUIAnalyzer:
 
         # Note about filter
         minor_user_count = len(user_all_chats) - len(sorted_users)
-        filter_note = f", {minor_user_count} users with <5 chats not shown" if minor_user_count > 0 else ""
+        filter_note = f", {minor_user_count} users with <{min_chats} chats not shown" if minor_user_count > 0 else ""
         print(f"\n(Rate = compliance %, 👍/👎 = thumbs up/down counts, '--' = no chats{filter_note})")
 
         # Also show summary table
@@ -658,8 +666,9 @@ class OpenWebUIAnalyzer:
                 'rate': compliance
             })
 
-        # Filter to users with 5+ chats and sort
-        user_compliance = [u for u in user_compliance if u['total'] >= 5]
+        # Filter to users with min_chats+ chats and sort
+        all_user_count = len(user_compliance)
+        user_compliance = [u for u in user_compliance if u['total'] >= min_chats]
         user_compliance.sort(key=lambda x: -x['total'])
 
         print(f"{'User':<25} {'Chats':>7} {'No FB':>7} {'👍':>6} {'👎':>6} {'Rate':>8}")
@@ -669,9 +678,9 @@ class OpenWebUIAnalyzer:
             print(f"{name:<25} {u['total']:>7} {u['no_fb']:>7} {u['up']:>6} {u['down']:>6} {u['rate']:>7.1f}%")
 
         # Show count of minor users
-        minor_users = len(user_all_chats) - len(user_compliance)
+        minor_users = all_user_count - len(user_compliance)
         if minor_users > 0:
-            print(f"\n({minor_users} users with <5 chats not shown)")
+            print(f"\n({minor_users} users with <{min_chats} chats not shown)")
 
         print()
 
@@ -732,43 +741,60 @@ class OpenWebUIAnalyzer:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        print("\nError: Please provide path to webui.db")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description='Open WebUI Database Analyzer',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Commands:
+  summary   - Overview of all tables and record counts (default)
+  chats     - Chat volume analysis
+  users     - User statistics
+  timeline  - Chat activity over time
+  models    - Model usage statistics
+  feedback  - Thumbs up/down feedback statistics
+  export    - Export chat data to JSON
+  all       - Run all analyses
+"""
+    )
+    parser.add_argument('db_path', help='Path to webui.db file')
+    parser.add_argument('command', nargs='?', default='summary',
+                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'export', 'all'],
+                        help='Command to run (default: summary)')
+    parser.add_argument('--all-users', '-a', action='store_true',
+                        help='Show all users (default: hide users with <500 chats)')
+    parser.add_argument('--min-chats', '-m', type=int, default=DEFAULT_MIN_CHATS,
+                        help=f'Minimum chats to show user (default: {DEFAULT_MIN_CHATS})')
+    parser.add_argument('--output', '-o', help='Output file for export command')
 
-    db_path = sys.argv[1]
-    command = sys.argv[2] if len(sys.argv) > 2 else 'summary'
+    args = parser.parse_args()
+
+    # Determine min_chats threshold
+    min_chats = 0 if args.all_users else args.min_chats
 
     try:
-        with OpenWebUIAnalyzer(db_path) as analyzer:
-            if command == 'summary':
+        with OpenWebUIAnalyzer(args.db_path) as analyzer:
+            if args.command == 'summary':
                 analyzer.summary()
                 analyzer.chat_volume()
-            elif command == 'chats':
+            elif args.command == 'chats':
                 analyzer.chat_volume()
-            elif command == 'users':
+            elif args.command == 'users':
                 analyzer.user_stats()
-            elif command == 'timeline':
+            elif args.command == 'timeline':
                 analyzer.timeline()
-            elif command == 'models':
+            elif args.command == 'models':
                 analyzer.model_usage()
-            elif command == 'feedback':
-                analyzer.feedback_stats()
-            elif command == 'export':
-                output = sys.argv[3] if len(sys.argv) > 3 else None
-                analyzer.export_chats(output)
-            elif command == 'all':
+            elif args.command == 'feedback':
+                analyzer.feedback_stats(min_chats=min_chats)
+            elif args.command == 'export':
+                analyzer.export_chats(args.output)
+            elif args.command == 'all':
                 analyzer.summary()
                 analyzer.chat_volume()
                 analyzer.user_stats()
                 analyzer.timeline()
                 analyzer.model_usage()
-                analyzer.feedback_stats()
-            else:
-                print(f"Unknown command: {command}")
-                print(__doc__)
-                sys.exit(1)
+                analyzer.feedback_stats(min_chats=min_chats)
     except FileNotFoundError as e:
         print(f"Error: {e}")
         sys.exit(1)
