@@ -562,36 +562,57 @@ class OpenWebUIAnalyzer:
         # Sort users by total chats
         sorted_users = sorted(user_all_chats.keys(), key=lambda u: -user_totals[u]['total'])
 
-        # Print header with months
-        month_labels = [m[-5:] for m in sorted_months[-6:]]  # Last 6 months, show as "MM-YY" style
-        header = f"{'User':<20} {'Total':>6}"
-        for m in sorted_months[-6:]:
-            header += f" {m[-5:]:>7}"
+        # Print header with months (compact format: rate% up/dn)
+        month_labels = sorted_months[-6:]  # Last 6 months
+        header = f"{'User':<18} {'Tot':>4}"
+        for m in month_labels:
+            header += f" {m[-5:]:^13}"
         print(header)
-        print("-" * (28 + 8 * len(sorted_months[-6:])))
 
-        # Print each user's monthly compliance rates
+        # Sub-header for columns
+        sub_header = f"{'':<18} {'':>4}"
+        for _ in month_labels:
+            sub_header += f" {'Rate  👍/👎':^13}"
+        print(sub_header)
+        print("-" * (24 + 14 * len(month_labels)))
+
+        # Print each user's monthly compliance rates with up/down
         for user_id in sorted_users[:15]:  # Top 15 users
             name = user_names.get(user_id, user_id or '(unknown)')
-            name = name[:19] if name else '(unknown)'
+            name = name[:17] if name else '(unknown)'
             total = user_totals[user_id]['total']
 
-            row_str = f"{name:<20} {total:>6}"
+            row_str = f"{name:<18} {total:>4}"
 
-            for month in sorted_months[-6:]:
+            for month in month_labels:
                 month_chat_ids = user_month_chats[user_id].get(month, [])
                 if not month_chat_ids:
-                    row_str += f" {'--':>7}"
+                    row_str += f" {'--':^13}"
                 else:
                     month_total = len(month_chat_ids)
-                    month_no_fb = sum(1 for cid in month_chat_ids if not chat_feedback_type.get(cid) or
-                                     (not chat_feedback_type.get(cid, {}).get('up') and not chat_feedback_type.get(cid, {}).get('down')))
+                    month_up = 0
+                    month_down = 0
+                    month_no_fb = 0
+
+                    for cid in month_chat_ids:
+                        fb = chat_feedback_type.get(cid)
+                        if fb:
+                            if fb['up']:
+                                month_up += 1
+                            if fb['down']:
+                                month_down += 1
+                            if not fb['up'] and not fb['down']:
+                                month_no_fb += 1
+                        else:
+                            month_no_fb += 1
+
                     month_rate = ((month_total - month_no_fb) / month_total * 100) if month_total > 0 else 0
-                    row_str += f" {month_rate:>6.0f}%"
+                    cell = f"{month_rate:3.0f}% {month_up:>2}/{month_down:<2}"
+                    row_str += f" {cell:^13}"
 
             print(row_str)
 
-        print("\n(showing compliance rate % per month, '--' = no chats that month)")
+        print("\n(Rate = compliance %, 👍/👎 = thumbs up/down counts, '--' = no chats)")
 
         # Also show summary table
         print("\n" + "-" * 75)
