@@ -87,24 +87,30 @@ class OpenWebUITester:
         return True
 
     def create_user(self, name, email, password="testpass123"):
-        """Create a regular user."""
+        """Create a regular user via admin API."""
         print(f"Creating user: {email}")
 
-        # Need to use admin token to create users, or signup if allowed
-        resp = self.session.post(f"{BASE_URL}/api/v1/auths/signup", json={
-            "name": name,
-            "email": email,
-            "password": password
-        })
+        # Use admin API to add user
+        headers = {"Authorization": f"Bearer {self.admin_token}"}
+        resp = self.session.post(f"{BASE_URL}/api/v1/auths/add",
+            headers=headers,
+            json={
+                "name": name,
+                "email": email,
+                "password": password,
+                "role": "user"
+            }
+        )
 
-        if resp.status_code != 200:
-            print(f"Failed to create user: {resp.status_code} - {resp.text}")
+        if resp.status_code not in [200, 201]:
+            print(f"Failed to create user via admin API: {resp.status_code} - {resp.text}")
             return None
 
-        data = resp.json()
-        token = data.get("token")
-        self.user_tokens[email] = token
-        print(f"User {name} created")
+        # Now login as the user to get their token
+        token = self.login(email, password)
+        if token:
+            self.user_tokens[email] = token
+            print(f"User {name} created and logged in")
         return token
 
     def login(self, email, password="testpass123"):
