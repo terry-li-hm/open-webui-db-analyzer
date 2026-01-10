@@ -51,6 +51,7 @@ python analyzer.py <path_to_webui.db> [command] [options]
 | `--min-chats N`, `-m N` | Minimum chats to show user (default: 500) |
 | `--export-file FILE`, `-e FILE` | Open WebUI feedback JSON export for comparison |
 | `--output FILE`, `-o FILE` | Output file for export command |
+| `--debug`, `-d` | Show debug info for parse errors and unknown values |
 
 ## Examples
 
@@ -167,6 +168,55 @@ docker cp open-webui:/app/backend/data/webui.db ./webui.db
 ```
 
 Or if running locally, check the `data/` directory in your Open WebUI installation.
+
+## Data Quality Warnings
+
+The analyzer tracks and reports data quality issues:
+
+```
+⚠️  DATA QUALITY WARNINGS
+============================================================
+
+JSON Parse Errors: 5 total
+  - chat_volume/messages: 3
+  - feedback_stats/data: 2
+
+Unknown Rating Values: 2 total (not counted as 👍 or 👎)
+  - str:'maybe': 1
+  - list:[1, 2, 3]: 1
+
+These issues may affect stat accuracy. Use 'verify' command for details.
+```
+
+Use `--debug` to see errors inline as they occur:
+```bash
+python analyzer.py webui.db feedback --debug
+```
+
+## Integration Testing
+
+Run automated tests against a real Open WebUI instance:
+
+```bash
+# Requires Docker and requests library
+pip install requests
+
+# Run full integration test (starts/stops Docker container)
+python integration_test.py
+
+# Keep container running after test (for debugging)
+python integration_test.py --keep
+
+# Use existing container (skip Docker setup)
+python integration_test.py --skip-docker
+```
+
+The test:
+1. Spins up Open WebUI via Docker
+2. Creates test users, chats, and feedback via API
+3. Copies the database and runs the analyzer
+4. Validates results match expected values
+5. Cleans up
 
 ## Related
 
