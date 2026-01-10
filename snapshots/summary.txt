@@ -1,0 +1,58 @@
+============================================================
+OPEN WEBUI DATABASE SUMMARY
+============================================================
+
+Table                        Records
+-------------------------------------
+alembic_version                    1
+auth                               0
+chat                               6
+config                             0
+feedback                           5
+user                               3
+-------------------------------------
+TOTAL                             15
+
+============================================================
+CHAT VOLUME ANALYSIS
+============================================================
+
+Total Chats: 6
+  - Active: 6
+  - Archived: 0
+  - Pinned: 0
+
+----------------------------------------
+CHATS PER USER
+----------------------------------------
+User                                     Email                             Chats
+--------------------------------------------------------------------------------
+Alice Smith                              alice@example.com                     3
+Bob Jones                                bob@example.com                       2
+Carol White                              carol@example.com                     1
+
+----------------------------------------
+MESSAGE STATISTICS
+----------------------------------------
+Total Messages: 12
+  - User messages: 6
+  - Assistant messages: 6
+  - Avg messages per chat: 2.0
+
+
+============================================================
+📊 PARSE SUCCESS RATES
+============================================================
+  ✓ chat messages: 6/6 (100.0%)
+  All records parsed successfully!
+
+============================================================
+🔍 SANITY CHECKS
+============================================================
+  ✓ Chat count consistency: OK
+  ✓ Chat user references valid: OK
+  ✓ Feedback user references valid: OK
+  ✓ Feedback count consistency: OK (3👍 + 2👎 + 0 neutral + 0 failed = 5)
+  ✓ No duplicate chat IDs: OK
+  All sanity checks passed!
+

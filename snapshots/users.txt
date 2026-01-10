@@ -1,0 +1,30 @@
+============================================================
+USER STATISTICS
+============================================================
+
+Total Users: 3
+
+Users by Role:
+  - user: 2
+  - admin: 1
+
+----------------------------------------
+USER ACTIVITY (Last Active)
+----------------------------------------
+Name                                     Role        Chats Last Active         
+--------------------------------------------------------------------------------
+Alice Smith                              admin           3 2024-06-15 20:00    
+Bob Jones                                user            2 2024-06-15 19:00    
+Carol White                              user            1 2024-06-15 18:00    
+
+
+============================================================
+🔍 SANITY CHECKS
+============================================================
+  ✓ Chat count consistency: OK
+  ✓ Chat user references valid: OK
+  ✓ Feedback user references valid: OK
+  ✓ Feedback count consistency: OK (3👍 + 2👎 + 0 neutral + 0 failed = 5)
+  ✓ No duplicate chat IDs: OK
+  All sanity checks passed!
+

@@ -1,0 +1,26 @@
+============================================================
+MODEL USAGE ANALYSIS
+============================================================
+
+Model                                                   Chats
+--------------------------------------------------------------
+gpt-4                                                       4
+claude-3                                                    2
+
+
+============================================================
+📊 PARSE SUCCESS RATES
+============================================================
+  ✓ model detection: 6/6 (100.0%)
+  All records parsed successfully!
+
+============================================================
+🔍 SANITY CHECKS
+============================================================
+  ✓ Chat count consistency: OK
+  ✓ Chat user references valid: OK
+  ✓ Feedback user references valid: OK
+  ✓ Feedback count consistency: OK (3👍 + 2👎 + 0 neutral + 0 failed = 5)
+  ✓ No duplicate chat IDs: OK
+  All sanity checks passed!
+

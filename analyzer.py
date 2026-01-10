@@ -51,6 +51,8 @@ class OpenWebUIAnalyzer:
         # Error tracking
         self._parse_errors = defaultdict(int)
         self._unknown_ratings = defaultdict(int)
+        # Parse success tracking: {context: (success_count, total_count)}
+        self._parse_stats = defaultdict(lambda: [0, 0])
 
     def __enter__(self):
         return self
@@ -76,28 +78,199 @@ class OpenWebUIAnalyzer:
         if self.debug:
             print(f"  [DEBUG] Unknown rating: {key}")
 
+    def _track_parse(self, context: str, success: bool):
+        """Track parse attempt for success rate calculation."""
+        self._parse_stats[context][1] += 1  # total
+        if success:
+            self._parse_stats[context][0] += 1  # success
+
+    def _run_sanity_checks(self) -> list[tuple[str, bool, str]]:
+        """Run sanity checks on data consistency. Returns list of (check_name, passed, details)."""
+        checks = []
+
+        # Check 1: Sum of per-user chats equals total chats
+        self.cursor.execute("SELECT COUNT(*) as count FROM chat")
+        total_chats = self.cursor.fetchone()['count']
+
+        self.cursor.execute("SELECT SUM(cnt) as total FROM (SELECT COUNT(*) as cnt FROM chat GROUP BY user_id)")
+        row = self.cursor.fetchone()
+        sum_user_chats = row['total'] if row['total'] else 0
+
+        passed = total_chats == sum_user_chats
+        checks.append((
+            "Chat count consistency",
+            passed,
+            f"Total: {total_chats}, Sum by user: {sum_user_chats}" if not passed else "OK"
+        ))
+
+        # Check 2: All chat.user_id references exist in user table
+        self.cursor.execute("""
+            SELECT COUNT(*) as count FROM chat
+            WHERE user_id NOT IN (SELECT id FROM user)
+        """)
+        orphan_chats = self.cursor.fetchone()['count']
+        passed = orphan_chats == 0
+        checks.append((
+            "Chat user references valid",
+            passed,
+            f"{orphan_chats} chats reference non-existent users" if not passed else "OK"
+        ))
+
+        # Check 3: All feedback.user_id references exist in user table
+        self.cursor.execute("""
+            SELECT name FROM sqlite_master WHERE type='table' AND name='feedback'
+        """)
+        if self.cursor.fetchone():
+            self.cursor.execute("""
+                SELECT COUNT(*) as count FROM feedback
+                WHERE user_id NOT IN (SELECT id FROM user)
+            """)
+            orphan_feedback = self.cursor.fetchone()['count']
+            passed = orphan_feedback == 0
+            checks.append((
+                "Feedback user references valid",
+                passed,
+                f"{orphan_feedback} feedbacks reference non-existent users" if not passed else "OK"
+            ))
+
+        # Check 4: Feedback thumbs up + down + neutral = total feedback
+        self.cursor.execute("SELECT COUNT(*) as count FROM feedback")
+        total_feedback = self.cursor.fetchone()['count']
+
+        if total_feedback > 0:
+            self.cursor.execute("SELECT data FROM feedback")
+            up = down = neutral = parse_fail = 0
+            for row in self.cursor.fetchall():
+                try:
+                    data = json.loads(row['data']) if row['data'] else {}
+                    rating = data.get('rating')
+                    if rating is not None:
+                        if isinstance(rating, (int, float)):
+                            if rating > 0:
+                                up += 1
+                            elif rating < 0:
+                                down += 1
+                            else:
+                                neutral += 1
+                        elif isinstance(rating, str) and rating.lower() in ('1', 'like', 'positive', 'up', 'good', 'yes'):
+                            up += 1
+                        elif isinstance(rating, str) and rating.lower() in ('-1', 'dislike', 'negative', 'down', 'bad', 'no', '0'):
+                            down += 1
+                        else:
+                            neutral += 1
+                    else:
+                        neutral += 1
+                except (json.JSONDecodeError, TypeError):
+                    parse_fail += 1
+
+            counted = up + down + neutral + parse_fail
+            passed = counted == total_feedback
+            checks.append((
+                "Feedback count consistency",
+                passed,
+                f"Counted: {counted}, Total: {total_feedback}" if not passed else f"OK ({up}👍 + {down}👎 + {neutral} neutral + {parse_fail} failed = {counted})"
+            ))
+
+        # Check 5: No duplicate chat IDs
+        self.cursor.execute("""
+            SELECT id, COUNT(*) as cnt FROM chat GROUP BY id HAVING cnt > 1
+        """)
+        dupes = self.cursor.fetchall()
+        passed = len(dupes) == 0
+        checks.append((
+            "No duplicate chat IDs",
+            passed,
+            f"{len(dupes)} duplicate chat IDs found" if not passed else "OK"
+        ))
+
+        return checks
+
+    def _get_schema_version(self) -> dict:
+        """Detect database schema version and Open WebUI compatibility."""
+        info = {
+            'tables': [],
+            'expected_tables': ['user', 'chat', 'feedback', 'auth', 'config'],
+            'missing_tables': [],
+            'extra_tables': [],
+            'alembic_version': None
+        }
+
+        # Get all tables
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        info['tables'] = [row['name'] for row in self.cursor.fetchall()]
+
+        # Check for expected tables
+        info['missing_tables'] = [t for t in info['expected_tables'] if t not in info['tables']]
+
+        # Get alembic version if exists
+        if 'alembic_version' in info['tables']:
+            self.cursor.execute("SELECT version_num FROM alembic_version LIMIT 1")
+            row = self.cursor.fetchone()
+            if row:
+                info['alembic_version'] = row['version_num']
+
+        # Check migrate history count
+        if 'migratehistory' in info['tables']:
+            self.cursor.execute("SELECT COUNT(*) as cnt FROM migratehistory")
+            info['migration_count'] = self.cursor.fetchone()['cnt']
+
+        return info
+
     def _report_data_quality(self):
-        """Report any data quality issues encountered."""
-        if not self._parse_errors and not self._unknown_ratings:
-            return
+        """Report parse success rates, sanity checks, and any data quality issues."""
+        has_issues = self._parse_errors or self._unknown_ratings
+        has_parse_stats = any(stats[1] > 0 for stats in self._parse_stats.values())
+
+        # Always show parse success rates if we have stats
+        if has_parse_stats:
+            print("\n" + "=" * 60)
+            print("📊 PARSE SUCCESS RATES")
+            print("=" * 60)
+            all_success = True
+            for context, (success, total) in sorted(self._parse_stats.items()):
+                if total > 0:
+                    rate = success / total * 100
+                    status = "✓" if rate == 100 else "⚠️" if rate >= 90 else "✗"
+                    if rate < 100:
+                        all_success = False
+                    print(f"  {status} {context}: {success:,}/{total:,} ({rate:.1f}%)")
+            if all_success:
+                print("  All records parsed successfully!")
+
+        # Run and report sanity checks
+        checks = self._run_sanity_checks()
+        failed_checks = [c for c in checks if not c[1]]
 
         print("\n" + "=" * 60)
-        print("⚠️  DATA QUALITY WARNINGS")
+        print("🔍 SANITY CHECKS")
         print("=" * 60)
+        for name, passed, details in checks:
+            status = "✓" if passed else "✗"
+            print(f"  {status} {name}: {details}")
 
-        if self._parse_errors:
-            total_errors = sum(self._parse_errors.values())
-            print(f"\nJSON Parse Errors: {total_errors:,} total")
-            for context, count in sorted(self._parse_errors.items(), key=lambda x: -x[1]):
-                print(f"  - {context}: {count:,}")
+        if not failed_checks:
+            print("  All sanity checks passed!")
 
-        if self._unknown_ratings:
-            total_unknown = sum(self._unknown_ratings.values())
-            print(f"\nUnknown Rating Values: {total_unknown:,} total (not counted as 👍 or 👎)")
-            for rating, count in sorted(self._unknown_ratings.items(), key=lambda x: -x[1]):
-                print(f"  - {rating}: {count:,}")
+        # Report warnings if any
+        if has_issues:
+            print("\n" + "=" * 60)
+            print("⚠️  DATA QUALITY WARNINGS")
+            print("=" * 60)
 
-        print("\nThese issues may affect stat accuracy. Use 'verify' command for details.")
+            if self._parse_errors:
+                total_errors = sum(self._parse_errors.values())
+                print(f"\nJSON Parse Errors: {total_errors:,} total")
+                for context, count in sorted(self._parse_errors.items(), key=lambda x: -x[1]):
+                    print(f"  - {context}: {count:,}")
+
+            if self._unknown_ratings:
+                total_unknown = sum(self._unknown_ratings.values())
+                print(f"\nUnknown Rating Values: {total_unknown:,} total (not counted as 👍 or 👎)")
+                for rating, count in sorted(self._unknown_ratings.items(), key=lambda x: -x[1]):
+                    print(f"  - {rating}: {count:,}")
+
+            print("\nUse 'verify' command for detailed investigation.")
+
         print()
 
     def get_tables(self) -> list[dict]:
@@ -207,8 +380,10 @@ class OpenWebUIAnalyzer:
                         user_messages += 1
                     elif role == 'assistant':
                         assistant_messages += 1
+                self._track_parse('chat messages', True)
             except (json.JSONDecodeError, TypeError) as e:
                 self._track_error('chat_volume/messages', e)
+                self._track_parse('chat messages', False)
 
         print(f"Total Messages: {total_messages:,}")
         print(f"  - User messages: {user_messages:,}")
@@ -337,9 +512,11 @@ class OpenWebUIAnalyzer:
                     model_counts[model] += 1
                 else:
                     model_counts['(unknown)'] += 1
+                self._track_parse('model detection', True)
             except (json.JSONDecodeError, TypeError, IndexError) as e:
                 model_counts['(parse error)'] += 1
                 self._track_error('model_usage/chat', e)
+                self._track_parse('model detection', False)
 
         print(f"\n{'Model':<50} {'Chats':>10}")
         print("-" * 62)
@@ -458,8 +635,10 @@ class OpenWebUIAnalyzer:
                         elif is_negative:
                             monthly[month_key]['down'] += 1
 
+                self._track_parse('feedback data', True)
             except (json.JSONDecodeError, TypeError) as e:
                 self._track_error('feedback_stats/data', e)
+                self._track_parse('feedback data', False)
 
         # Summary
         print(f"\n👍 Thumbs Up:   {thumbs_up:,}")
@@ -1045,15 +1224,19 @@ class OpenWebUIAnalyzer:
         print()
 
     def _parse_timestamp(self, ts) -> datetime | None:
-        """Parse timestamp (could be seconds or nanoseconds)."""
+        """Parse timestamp (could be seconds, milliseconds, or nanoseconds)."""
         if not ts:
             return None
         try:
-            # If timestamp is very large, it's likely nanoseconds
-            if ts > 1e12:
+            # Detect timestamp format based on magnitude:
+            # - Current timestamps in seconds: ~1.7e9 (2024)
+            # - In milliseconds: ~1.7e12
+            # - In nanoseconds: ~1.7e18
+            if ts > 1e15:  # Nanoseconds (> quadrillion)
                 ts = ts / 1e9
-            elif ts > 1e10:
+            elif ts > 1e11:  # Milliseconds (> 100 billion)
                 ts = ts / 1e3
+            # else: already in seconds
             return datetime.fromtimestamp(ts)
         except (ValueError, OSError, OverflowError):
             return None
