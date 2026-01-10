@@ -21,6 +21,7 @@ Options:
     --all           Show all users (default: hide users with <500 chats)
     --min-chats N   Minimum chats to show user (default: 500)
     --export-file   Path to Open WebUI feedback JSON export (for compare command)
+    --debug         Show debug info for parse errors and unknown rating values
 """
 
 import sqlite3
@@ -39,13 +40,17 @@ DEFAULT_MIN_CHATS = 500
 class OpenWebUIAnalyzer:
     """Analyzer for Open WebUI SQLite database."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, debug: bool = False):
         if not os.path.exists(db_path):
             raise FileNotFoundError(f"Database not found: {db_path}")
         self.db_path = db_path
+        self.debug = debug
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
+        # Error tracking
+        self._parse_errors = defaultdict(int)
+        self._unknown_ratings = defaultdict(int)
 
     def __enter__(self):
         return self
@@ -57,6 +62,43 @@ class OpenWebUIAnalyzer:
         """Close database connection."""
         if self.conn:
             self.conn.close()
+
+    def _track_error(self, context: str, error: Exception = None):
+        """Track a parse error for later reporting."""
+        self._parse_errors[context] += 1
+        if self.debug and error:
+            print(f"  [DEBUG] Parse error in {context}: {error}")
+
+    def _track_unknown_rating(self, rating_value):
+        """Track an unrecognized rating value."""
+        key = f"{type(rating_value).__name__}:{repr(rating_value)}"
+        self._unknown_ratings[key] += 1
+        if self.debug:
+            print(f"  [DEBUG] Unknown rating: {key}")
+
+    def _report_data_quality(self):
+        """Report any data quality issues encountered."""
+        if not self._parse_errors and not self._unknown_ratings:
+            return
+
+        print("\n" + "=" * 60)
+        print("⚠️  DATA QUALITY WARNINGS")
+        print("=" * 60)
+
+        if self._parse_errors:
+            total_errors = sum(self._parse_errors.values())
+            print(f"\nJSON Parse Errors: {total_errors:,} total")
+            for context, count in sorted(self._parse_errors.items(), key=lambda x: -x[1]):
+                print(f"  - {context}: {count:,}")
+
+        if self._unknown_ratings:
+            total_unknown = sum(self._unknown_ratings.values())
+            print(f"\nUnknown Rating Values: {total_unknown:,} total (not counted as 👍 or 👎)")
+            for rating, count in sorted(self._unknown_ratings.items(), key=lambda x: -x[1]):
+                print(f"  - {rating}: {count:,}")
+
+        print("\nThese issues may affect stat accuracy. Use 'verify' command for details.")
+        print()
 
     def get_tables(self) -> list[dict]:
         """Get all tables and their row counts."""
@@ -165,8 +207,8 @@ class OpenWebUIAnalyzer:
                         user_messages += 1
                     elif role == 'assistant':
                         assistant_messages += 1
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                self._track_error('chat_volume/messages', e)
 
         print(f"Total Messages: {total_messages:,}")
         print(f"  - User messages: {user_messages:,}")
@@ -295,8 +337,9 @@ class OpenWebUIAnalyzer:
                     model_counts[model] += 1
                 else:
                     model_counts['(unknown)'] += 1
-            except (json.JSONDecodeError, TypeError, IndexError):
+            except (json.JSONDecodeError, TypeError, IndexError) as e:
                 model_counts['(parse error)'] += 1
+                self._track_error('model_usage/chat', e)
 
         print(f"\n{'Model':<50} {'Chats':>10}")
         print("-" * 62)
@@ -359,19 +402,29 @@ class OpenWebUIAnalyzer:
                 # Determine if positive or negative
                 is_positive = False
                 is_negative = False
+                is_recognized = False
 
                 if rating is not None:
                     if isinstance(rating, (int, float)):
+                        is_recognized = True
                         if rating > 0:
                             is_positive = True
                         elif rating < 0:
                             is_negative = True
+                        # rating == 0 is recognized but neutral
                     elif isinstance(rating, str):
                         rating_lower = rating.lower()
                         if rating_lower in ('1', 'like', 'positive', 'up', 'good', 'yes'):
                             is_positive = True
-                        elif rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no'):
+                            is_recognized = True
+                        elif rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no', '0'):
                             is_negative = True
+                            is_recognized = True
+                        else:
+                            self._track_unknown_rating(rating)
+                    else:
+                        self._track_unknown_rating(rating)
+                # rating is None is recognized as "no rating given"
 
                 if is_positive:
                     thumbs_up += 1
@@ -405,8 +458,8 @@ class OpenWebUIAnalyzer:
                         elif is_negative:
                             monthly[month_key]['down'] += 1
 
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                self._track_error('feedback_stats/data', e)
 
         # Summary
         print(f"\n👍 Thumbs Up:   {thumbs_up:,}")
@@ -486,8 +539,8 @@ class OpenWebUIAnalyzer:
                     chat_feedback_type[chat_id]['up'] = True
                 if is_negative:
                     chat_feedback_type[chat_id]['down'] = True
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                self._track_error('feedback_stats/chat_feedback_type', e)
 
         # Calculate monthly stats with no-feedback count
         print("\n" + "-" * 65)
@@ -1039,6 +1092,8 @@ Commands:
                         help=f'Minimum chats to show user (default: {DEFAULT_MIN_CHATS})')
     parser.add_argument('--export-file', '-e', help='Open WebUI feedback JSON export (for compare command)')
     parser.add_argument('--output', '-o', help='Output file for export command')
+    parser.add_argument('--debug', '-d', action='store_true',
+                        help='Show debug info for parse errors and unknown values')
 
     args = parser.parse_args()
 
@@ -1046,7 +1101,7 @@ Commands:
     min_chats = 0 if args.all_users else args.min_chats
 
     try:
-        with OpenWebUIAnalyzer(args.db_path) as analyzer:
+        with OpenWebUIAnalyzer(args.db_path, debug=args.debug) as analyzer:
             if args.command == 'summary':
                 analyzer.summary()
                 analyzer.chat_volume()
@@ -1077,6 +1132,9 @@ Commands:
                 analyzer.timeline()
                 analyzer.model_usage()
                 analyzer.feedback_stats(min_chats=min_chats)
+
+            # Always report data quality issues at the end
+            analyzer._report_data_quality()
     except FileNotFoundError as e:
         print(f"Error: {e}")
         sys.exit(1)
