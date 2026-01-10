@@ -182,10 +182,11 @@ class OpenWebUITester:
         """Add feedback (thumbs up/down) to a message."""
         headers = {"Authorization": f"Bearer {token}"}
 
-        # The feedback API endpoint
-        resp = self.session.post(f"{BASE_URL}/api/v1/feedbacks",
+        # The feedback API endpoint is under /api/v1/evaluations/feedback
+        resp = self.session.post(f"{BASE_URL}/api/v1/evaluations/feedback",
             headers=headers,
             json={
+                "type": "rating",
                 "data": {
                     "rating": rating,  # 1 for thumbs up, -1 for thumbs down
                     "model_id": model_id
@@ -198,7 +199,7 @@ class OpenWebUITester:
         )
 
         if resp.status_code not in [200, 201]:
-            print(f"Failed to add feedback: {resp.status_code} - {resp.text}")
+            print(f"Failed to add feedback: {resp.status_code} - {resp.text[:200]}")
             return False
         return True
 
@@ -393,6 +394,8 @@ def main():
             "Found Alice's chats": lambda o: "Alice Test" in o,
             "Found Bob's chats": lambda o: "Bob Test" in o,
             "Feedback section present": lambda o: "FEEDBACK ANALYSIS" in o,
+            "Found thumbs up feedback": lambda o: "Thumbs Up:" in o and "Thumbs Up:   0" not in o,
+            "Found thumbs down feedback": lambda o: "Thumbs Down:" in o and "Thumbs Down: 0" not in o,
             "No critical parse errors": lambda o: "DATA QUALITY WARNINGS" not in o or "JSON Parse Errors" not in o,
         }
 
