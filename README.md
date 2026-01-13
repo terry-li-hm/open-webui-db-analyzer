@@ -158,6 +158,49 @@ Shows:
 - Cross-reference validation
 - Consistency checks
 
+## Database Timestamps
+
+Open WebUI tracks modification times for most entities. Key timestamp fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `created_at` | BigInteger | When entry was created (nanoseconds since epoch) |
+| `updated_at` | BigInteger | When entry was last modified (nanoseconds since epoch) |
+
+Tables with these fields include: `model`, `knowledge`, `chat`, `file`, `function`, `tool`, `folder`, `user`, and most other core tables.
+
+To check recent config changes (last 7 days):
+```sql
+-- Recent model changes
+SELECT 'model' as type, id, name, datetime(updated_at/1000000000, 'unixepoch') as modified
+FROM model WHERE updated_at > (strftime('%s', 'now', '-7 days') * 1000000000)
+UNION ALL
+-- Recent knowledge base changes
+SELECT 'knowledge', id, name, datetime(updated_at/1000000000, 'unixepoch')
+FROM knowledge WHERE updated_at > (strftime('%s', 'now', '-7 days') * 1000000000)
+UNION ALL
+-- Recent function changes
+SELECT 'function', id, name, datetime(updated_at/1000000000, 'unixepoch')
+FROM function WHERE updated_at > (strftime('%s', 'now', '-7 days') * 1000000000)
+UNION ALL
+-- Recent tool changes
+SELECT 'tool', id, name, datetime(updated_at/1000000000, 'unixepoch')
+FROM tool WHERE updated_at > (strftime('%s', 'now', '-7 days') * 1000000000)
+UNION ALL
+-- Recent file uploads
+SELECT 'file', id, filename, datetime(updated_at/1000000000, 'unixepoch')
+FROM file WHERE updated_at > (strftime('%s', 'now', '-7 days') * 1000000000)
+ORDER BY modified DESC;
+```
+
+## Known Issues & Feedback
+
+### Source Reference Chunking
+
+When ingesting tabular data, chunks may be split randomly rather than respecting row boundaries. This can cause source references to display in an undesirable format.
+
+**Investigation**: Check if models or knowledge bases were recently modified using the timestamp queries above. Changes to RAG settings or re-ingestion may affect chunking behaviour.
+
 ## Getting webui.db
 
 The database is located inside the Open WebUI Docker container:
