@@ -13,6 +13,7 @@ Commands:
     timeline    - Chat activity over time
     models      - Model usage statistics
     feedback    - Thumbs up/down feedback statistics
+    changes     - Recent config changes (models, knowledge, functions, tools, files)
     verify      - Verify data accuracy with cross-checks and samples
     compare     - Compare DB against Open WebUI JSON export (requires --export-file)
     export      - Export chat data to JSON
@@ -20,6 +21,7 @@ Commands:
 Options:
     --all           Show all users (default: hide users with <500 chats)
     --min-chats N   Minimum chats to show user (default: 500)
+    --days N        Days to look back for changes command (default: 7)
     --export-file   Path to Open WebUI feedback JSON export (for compare command)
     --debug         Show debug info for parse errors and unknown rating values
 """
@@ -955,6 +957,99 @@ class OpenWebUIAnalyzer:
 
         print(f"Exported {len(chats)} chats to {output_path}")
 
+    def recent_changes(self, days: int = 7):
+        """Show recent config changes across models, knowledge, functions, tools, and files."""
+        print("=" * 70)
+        print(f"RECENT CONFIG CHANGES (Last {days} days)")
+        print("=" * 70)
+
+        # Calculate cutoff timestamp in nanoseconds
+        from time import time
+        cutoff_ns = int((time() - days * 86400) * 1e9)
+
+        # Tables to check: (table_name, name_column, has_updated_at)
+        config_tables = [
+            ('model', 'name', True),
+            ('knowledge', 'name', True),
+            ('function', 'name', True),
+            ('tool', 'name', True),
+            ('file', 'filename', True),
+        ]
+
+        all_changes = []
+
+        for table, name_col, has_updated in config_tables:
+            # Check if table exists
+            self.cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,)
+            )
+            if not self.cursor.fetchone():
+                continue
+
+            # Check if updated_at column exists
+            self.cursor.execute(f"PRAGMA table_info([{table}])")
+            columns = [row['name'] for row in self.cursor.fetchall()]
+
+            if 'updated_at' not in columns:
+                continue
+
+            # Query recent changes
+            query = f"""
+                SELECT id, {name_col} as name, created_at, updated_at
+                FROM [{table}]
+                WHERE updated_at > ?
+                ORDER BY updated_at DESC
+            """
+            self.cursor.execute(query, (cutoff_ns,))
+
+            for row in self.cursor.fetchall():
+                created = self._parse_timestamp(row['created_at'])
+                updated = self._parse_timestamp(row['updated_at'])
+
+                # Determine if this is a create or update
+                is_new = False
+                if created and updated:
+                    # If created and updated are within 1 minute, it's a new record
+                    is_new = abs((updated - created).total_seconds()) < 60
+
+                all_changes.append({
+                    'type': table,
+                    'id': row['id'],
+                    'name': row['name'] or '(unnamed)',
+                    'updated_at': row['updated_at'],
+                    'updated_dt': updated,
+                    'action': 'Created' if is_new else 'Modified'
+                })
+
+        # Sort by updated_at descending
+        all_changes.sort(key=lambda x: x['updated_at'], reverse=True)
+
+        if not all_changes:
+            print(f"\nNo config changes found in the last {days} days.")
+            print("\nTables checked: model, knowledge, function, tool, file")
+            return
+
+        print(f"\nFound {len(all_changes)} change(s):\n")
+        print(f"{'Type':<12} {'Action':<10} {'Name':<35} {'When':<20}")
+        print("-" * 80)
+
+        for change in all_changes:
+            when = change['updated_dt'].strftime('%Y-%m-%d %H:%M') if change['updated_dt'] else 'N/A'
+            name = (change['name'] or '(unnamed)')[:34]
+            print(f"{change['type']:<12} {change['action']:<10} {name:<35} {when:<20}")
+
+        # Summary by type
+        print("\n" + "-" * 40)
+        print("SUMMARY BY TYPE")
+        print("-" * 40)
+        from collections import Counter
+        type_counts = Counter(c['type'] for c in all_changes)
+        for t, count in type_counts.most_common():
+            print(f"  {t}: {count}")
+
+        print()
+
     def verify(self):
         """Verify data accuracy with cross-checks and sample data."""
         print("=" * 70)
@@ -1259,6 +1354,7 @@ Commands:
   timeline  - Chat activity over time
   models    - Model usage statistics
   feedback  - Thumbs up/down feedback statistics
+  changes   - Recent config changes (models, knowledge, functions, tools, files)
   verify    - Verify data accuracy with cross-checks
   compare   - Compare DB against Open WebUI JSON export
   export    - Export chat data to JSON
@@ -1267,12 +1363,14 @@ Commands:
     )
     parser.add_argument('db_path', help='Path to webui.db file')
     parser.add_argument('command', nargs='?', default='summary',
-                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'verify', 'compare', 'export', 'all'],
+                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'changes', 'verify', 'compare', 'export', 'all'],
                         help='Command to run (default: summary)')
     parser.add_argument('--all-users', '-a', action='store_true',
                         help='Show all users (default: hide users with <500 chats)')
     parser.add_argument('--min-chats', '-m', type=int, default=DEFAULT_MIN_CHATS,
                         help=f'Minimum chats to show user (default: {DEFAULT_MIN_CHATS})')
+    parser.add_argument('--days', type=int, default=7,
+                        help='Days to look back for changes command (default: 7)')
     parser.add_argument('--export-file', '-e', help='Open WebUI feedback JSON export (for compare command)')
     parser.add_argument('--output', '-o', help='Output file for export command')
     parser.add_argument('--debug', '-d', action='store_true',
@@ -1298,6 +1396,8 @@ Commands:
                 analyzer.model_usage()
             elif args.command == 'feedback':
                 analyzer.feedback_stats(min_chats=min_chats)
+            elif args.command == 'changes':
+                analyzer.recent_changes(days=args.days)
             elif args.command == 'verify':
                 analyzer.verify()
             elif args.command == 'compare':

@@ -38,6 +38,7 @@ python analyzer.py <path_to_webui.db> [command] [options]
 | `timeline` | Activity over time (monthly, daily, hourly) |
 | `models` | Model usage breakdown |
 | `feedback` | Thumbs up/down feedback analysis |
+| `changes` | Recent config changes (models, knowledge, functions, tools, files) |
 | `verify` | Data accuracy cross-checks |
 | `compare` | Compare against Open WebUI JSON export |
 | `export` | Export chat data to JSON |
@@ -49,6 +50,7 @@ python analyzer.py <path_to_webui.db> [command] [options]
 |--------|-------------|
 | `--all-users`, `-a` | Show all users (default: hide users with <500 chats) |
 | `--min-chats N`, `-m N` | Minimum chats to show user (default: 500) |
+| `--days N` | Days to look back for changes command (default: 7) |
 | `--export-file FILE`, `-e FILE` | Open WebUI feedback JSON export for comparison |
 | `--output FILE`, `-o FILE` | Output file for export command |
 | `--debug`, `-d` | Show debug info for parse errors and unknown values |
@@ -67,6 +69,12 @@ python analyzer.py ~/webui.db feedback --all-users
 
 # Feedback analysis (users with 100+ chats)
 python analyzer.py ~/webui.db feedback -m 100
+
+# Recent config changes (last 7 days)
+python analyzer.py ~/webui.db changes
+
+# Recent config changes (last 30 days)
+python analyzer.py ~/webui.db changes --days 30
 
 # Verify against Open WebUI export
 python analyzer.py ~/webui.db compare -e feedback_export.json
