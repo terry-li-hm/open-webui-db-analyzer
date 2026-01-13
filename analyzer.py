@@ -963,22 +963,23 @@ class OpenWebUIAnalyzer:
         print(f"RECENT CONFIG CHANGES (Last {days} days)")
         print("=" * 70)
 
-        # Calculate cutoff timestamp in nanoseconds
+        # Calculate cutoff - we'll compare after parsing timestamps
         from time import time
-        cutoff_ns = int((time() - days * 86400) * 1e9)
+        cutoff_time = time() - days * 86400
+        cutoff_dt = datetime.fromtimestamp(cutoff_time)
 
-        # Tables to check: (table_name, name_column, has_updated_at)
+        # Tables to check: (table_name, name_column)
         config_tables = [
-            ('model', 'name', True),
-            ('knowledge', 'name', True),
-            ('function', 'name', True),
-            ('tool', 'name', True),
-            ('file', 'filename', True),
+            ('model', 'name'),
+            ('knowledge', 'name'),
+            ('function', 'name'),
+            ('tool', 'name'),
+            ('file', 'filename'),
         ]
 
         all_changes = []
 
-        for table, name_col, has_updated in config_tables:
+        for table, name_col in config_tables:
             # Check if table exists
             self.cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -994,18 +995,21 @@ class OpenWebUIAnalyzer:
             if 'updated_at' not in columns:
                 continue
 
-            # Query recent changes
+            # Query all records and filter in Python (handles various timestamp formats)
             query = f"""
                 SELECT id, {name_col} as name, created_at, updated_at
                 FROM [{table}]
-                WHERE updated_at > ?
                 ORDER BY updated_at DESC
             """
-            self.cursor.execute(query, (cutoff_ns,))
+            self.cursor.execute(query)
 
             for row in self.cursor.fetchall():
                 created = self._parse_timestamp(row['created_at'])
                 updated = self._parse_timestamp(row['updated_at'])
+
+                # Skip if no valid timestamp or outside date range
+                if not updated or updated < cutoff_dt:
+                    continue
 
                 # Determine if this is a create or update
                 is_new = False
@@ -1022,12 +1026,31 @@ class OpenWebUIAnalyzer:
                     'action': 'Created' if is_new else 'Modified'
                 })
 
-        # Sort by updated_at descending
-        all_changes.sort(key=lambda x: x['updated_at'], reverse=True)
+        # Sort by updated datetime descending
+        all_changes.sort(key=lambda x: x['updated_dt'], reverse=True)
 
         if not all_changes:
             print(f"\nNo config changes found in the last {days} days.")
-            print("\nTables checked: model, knowledge, function, tool, file")
+            print(f"\nTables checked: model, knowledge, function, tool, file")
+            print(f"Cutoff date: {cutoff_dt.strftime('%Y-%m-%d %H:%M')}")
+
+            # Debug: show sample timestamps from each table
+            if self.debug:
+                print("\n[DEBUG] Sample timestamps from tables:")
+                for table, name_col in config_tables:
+                    self.cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                        (table,)
+                    )
+                    if not self.cursor.fetchone():
+                        continue
+                    self.cursor.execute(f"SELECT updated_at FROM [{table}] LIMIT 3")
+                    rows = self.cursor.fetchall()
+                    if rows:
+                        print(f"  {table}: {[row['updated_at'] for row in rows]}")
+                        for row in rows:
+                            parsed = self._parse_timestamp(row['updated_at'])
+                            print(f"    -> parsed: {parsed}")
             return
 
         print(f"\nFound {len(all_changes)} change(s):\n")
