@@ -946,6 +946,75 @@ class OpenWebUIAnalyzer:
         filter_note = f", {minor_user_count} users with <{min_chats} chats not shown" if minor_user_count > 0 else ""
         print(f"\n(Rate = compliance %, 👍/👎 = thumbs up/down counts, '--' = no chats{filter_note})")
 
+        # Thumbs up/down counter per month per user (dedicated view)
+        print("\n" + "-" * 75)
+        print("THUMBS UP/DOWN COUNT PER MONTH PER USER")
+        print("-" * 75)
+
+        # Get last 6 months for display
+        display_months = sorted_months[-6:]
+
+        # Build header with months (each month gets 👍 and 👎 columns)
+        header = f"{'User':<30}"
+        for m in display_months:
+            header += f" {m[-5:]:^11}"
+        print(header)
+
+        # Sub-header for up/down columns
+        sub_header = f"{'':<30}"
+        for _ in display_months:
+            sub_header += f" {'👍':>5} {'👎':>4}"
+        print(sub_header)
+        print("-" * (30 + 12 * len(display_months)))
+
+        # Print each user's monthly up/down counts
+        display_limit = len(sorted_users) if len(sorted_users) <= 15 else 15
+        for user_id in sorted_users[:display_limit]:
+            name = user_names.get(user_id, user_id or '(unknown)')
+            name = name[:29] if name else '(unknown)'
+
+            row_str = f"{name:<30}"
+
+            for month in display_months:
+                month_chat_ids = user_month_chats[user_id].get(month, [])
+                if not month_chat_ids:
+                    row_str += f" {'--':>5} {'--':>4}"
+                else:
+                    month_up = 0
+                    month_down = 0
+
+                    for cid in month_chat_ids:
+                        fb = chat_feedback_type.get(cid)
+                        if fb:
+                            if fb['up']:
+                                month_up += 1
+                            if fb['down']:
+                                month_down += 1
+
+                    row_str += f" {month_up:>5} {month_down:>4}"
+
+            print(row_str)
+
+        # Totals row
+        print("-" * (30 + 12 * len(display_months)))
+        totals_row = f"{'TOTAL':<30}"
+        for month in display_months:
+            month_up_total = 0
+            month_down_total = 0
+            for user_id in user_all_chats.keys():
+                for cid in user_month_chats[user_id].get(month, []):
+                    fb = chat_feedback_type.get(cid)
+                    if fb:
+                        if fb['up']:
+                            month_up_total += 1
+                        if fb['down']:
+                            month_down_total += 1
+            totals_row += f" {month_up_total:>5} {month_down_total:>4}"
+        print(totals_row)
+
+        if minor_user_count > 0:
+            print(f"\n({minor_user_count} users with <{min_chats} chats not shown)")
+
         # Also show summary table
         print("\n" + "-" * 75)
         print("USER FEEDBACK SUMMARY (All Time)")
