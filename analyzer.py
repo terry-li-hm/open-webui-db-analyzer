@@ -11,6 +11,7 @@ Commands:
     chats       - Chat volume analysis
     users       - User statistics
     timeline    - Chat activity over time
+    usage       - Per-user per-month chat counts
     models      - Model usage statistics
     feedback    - Thumbs up/down feedback statistics
     changes     - Recent config changes (models, knowledge, functions, tools, files)
@@ -482,6 +483,84 @@ class OpenWebUIAnalyzer:
         for day in recent_days:
             bar = '█' * min(40, daily[day])
             print(f"{day}: {daily[day]:>4} {bar}")
+        print()
+
+    def usage_stats(self, min_chats: int = DEFAULT_MIN_CHATS, months: int = 9):
+        """Analyze per-user per-month chat usage."""
+        print("=" * 60)
+        print("PER-USER MONTHLY USAGE")
+        print("=" * 60)
+
+        # Get all chats with user and timestamp
+        self.cursor.execute("""
+            SELECT c.user_id, c.id as chat_id, c.created_at, u.name, u.email
+            FROM chat c
+            LEFT JOIN user u ON c.user_id = u.id
+        """)
+
+        # Structure: user_id -> month -> count
+        user_month_chats = defaultdict(lambda: defaultdict(int))
+        user_total_chats = defaultdict(int)
+        user_names = {}
+        all_months = set()
+
+        for row in self.cursor.fetchall():
+            user_id = row['user_id']
+            user_total_chats[user_id] += 1
+            user_names[user_id] = row['name'] or row['email'] or user_id
+
+            ts = row['created_at']
+            if ts:
+                dt = self._parse_timestamp(ts)
+                if dt:
+                    month_key = dt.strftime('%Y-%m')
+                    user_month_chats[user_id][month_key] += 1
+                    all_months.add(month_key)
+
+        # Filter users by min_chats
+        filtered_users = [u for u in user_total_chats.keys() if user_total_chats[u] >= min_chats]
+        filtered_users.sort(key=lambda u: -user_total_chats[u])
+
+        if not filtered_users:
+            print(f"\nNo users with >= {min_chats} chats found.")
+            print(f"Total users: {len(user_total_chats)}")
+            return
+
+        # Get last N months for display
+        sorted_months = sorted(all_months)
+        display_months = sorted_months[-months:]
+
+        # Print header
+        header = f"{'User':<35} {'Total':>6}"
+        for m in display_months:
+            header += f" {m[-5:]:>7}"
+        print(f"\n{header}")
+        print("-" * (43 + 8 * len(display_months)))
+
+        # Print each user's monthly counts
+        for user_id in filtered_users:
+            name = user_names.get(user_id, '(unknown)')
+            name = name[:34] if name else '(unknown)'
+            total = user_total_chats[user_id]
+
+            row_str = f"{name:<35} {total:>6}"
+            for month in display_months:
+                count = user_month_chats[user_id].get(month, 0)
+                row_str += f" {count:>7}" if count > 0 else f" {'--':>7}"
+            print(row_str)
+
+        # Summary
+        minor_users = len(user_total_chats) - len(filtered_users)
+        if minor_users > 0:
+            print(f"\n({minor_users} users with <{min_chats} chats not shown)")
+
+        # Monthly totals row
+        print("-" * (43 + 8 * len(display_months)))
+        totals_row = f"{'TOTAL':<35} {sum(user_total_chats.values()):>6}"
+        for month in display_months:
+            month_total = sum(user_month_chats[u].get(month, 0) for u in user_total_chats.keys())
+            totals_row += f" {month_total:>7}"
+        print(totals_row)
         print()
 
     def model_usage(self):
@@ -1375,6 +1454,7 @@ Commands:
   chats     - Chat volume analysis
   users     - User statistics
   timeline  - Chat activity over time
+  usage     - Per-user per-month chat counts
   models    - Model usage statistics
   feedback  - Thumbs up/down feedback statistics
   changes   - Recent config changes (models, knowledge, functions, tools, files)
@@ -1386,7 +1466,7 @@ Commands:
     )
     parser.add_argument('db_path', help='Path to webui.db file')
     parser.add_argument('command', nargs='?', default='summary',
-                        choices=['summary', 'chats', 'users', 'timeline', 'models', 'feedback', 'changes', 'verify', 'compare', 'export', 'all'],
+                        choices=['summary', 'chats', 'users', 'timeline', 'usage', 'models', 'feedback', 'changes', 'verify', 'compare', 'export', 'all'],
                         help='Command to run (default: summary)')
     parser.add_argument('--all-users', '-a', action='store_true',
                         help='Show all users (default: hide users with <500 chats)')
@@ -1394,6 +1474,8 @@ Commands:
                         help=f'Minimum chats to show user (default: {DEFAULT_MIN_CHATS})')
     parser.add_argument('--days', type=int, default=7,
                         help='Days to look back for changes command (default: 7)')
+    parser.add_argument('--months', type=int, default=9,
+                        help='Months to display for usage command (default: 9)')
     parser.add_argument('--export-file', '-e', help='Open WebUI feedback JSON export (for compare command)')
     parser.add_argument('--output', '-o', help='Output file for export command')
     parser.add_argument('--debug', '-d', action='store_true',
@@ -1415,6 +1497,8 @@ Commands:
                 analyzer.user_stats()
             elif args.command == 'timeline':
                 analyzer.timeline()
+            elif args.command == 'usage':
+                analyzer.usage_stats(min_chats=min_chats, months=args.months)
             elif args.command == 'models':
                 analyzer.model_usage()
             elif args.command == 'feedback':
@@ -1436,6 +1520,7 @@ Commands:
                 analyzer.chat_volume()
                 analyzer.user_stats()
                 analyzer.timeline()
+                analyzer.usage_stats(min_chats=min_chats, months=args.months)
                 analyzer.model_usage()
                 analyzer.feedback_stats(min_chats=min_chats)
 
