@@ -1622,7 +1622,8 @@ class OpenWebUIAnalyzer:
         accuracy = []
         for m in months:
             total_rated = monthly_stats[m]['up'] + monthly_stats[m]['down']
-            acc = (monthly_stats[m]['up'] / total_rated * 100) if total_rated > 0 else 0
+            # Use None for months with no feedback (avoids false 0% accuracy)
+            acc = (monthly_stats[m]['up'] / total_rated * 100) if total_rated > 0 else None
             accuracy.append(acc)
 
         # Convert month strings to datetime for better x-axis formatting
@@ -1658,18 +1659,24 @@ class OpenWebUIAnalyzer:
         # === RIGHT AXIS: Accuracy line ===
         ax2 = ax1.twinx()
         ax2.set_ylabel('Accuracy (%)', color=COLOR_LINE, fontsize=11, fontweight='semibold')
-        ax2.plot(month_dates, accuracy, color=COLOR_LINE, linewidth=2.5, marker='o',
-                markersize=9, markerfacecolor='white', markeredgecolor=COLOR_LINE,
-                markeredgewidth=2.5, zorder=5)
+
+        # Filter out None values (months with no feedback data)
+        valid_dates = [d for d, a in zip(month_dates, accuracy) if a is not None]
+        valid_accuracy = [a for a in accuracy if a is not None]
+
+        if valid_accuracy:
+            ax2.plot(valid_dates, valid_accuracy, color=COLOR_LINE, linewidth=2.5, marker='o',
+                    markersize=9, markerfacecolor='white', markeredgecolor=COLOR_LINE,
+                    markeredgewidth=2.5, zorder=5)
         ax2.tick_params(axis='y', labelcolor=COLOR_LINE, labelsize=10)
         ax2.set_ylim(0, 105)
 
         # Value labels on line - only first, last, and notable changes
         # Use background box to prevent overlap with bars
-        for i, (x, y) in enumerate(zip(month_dates, accuracy)):
+        for i, (x, y) in enumerate(zip(valid_dates, valid_accuracy)):
             is_first = (i == 0)
-            is_last = (i == len(accuracy) - 1)
-            is_notable = (i > 0 and abs(y - accuracy[i-1]) > 5)
+            is_last = (i == len(valid_accuracy) - 1)
+            is_notable = (i > 0 and abs(y - valid_accuracy[i-1]) > 5)
 
             if is_first or is_last or is_notable:
                 # Place label below line if accuracy > 85% to avoid top crowding
@@ -1724,8 +1731,11 @@ class OpenWebUIAnalyzer:
         for m in months:
             stats = monthly_stats[m]
             total_rated = stats['up'] + stats['down']
-            acc = (stats['up'] / total_rated * 100) if total_rated > 0 else 0
-            print(f"{m:<10} {stats['chats']:>8,} {stats['up']:>6,} {stats['down']:>5,} {acc:>9.1f}%")
+            if total_rated > 0:
+                acc_str = f"{stats['up'] / total_rated * 100:>9.1f}%"
+            else:
+                acc_str = "      N/A"  # No feedback data
+            print(f"{m:<10} {stats['chats']:>8,} {stats['up']:>6,} {stats['down']:>5,} {acc_str}")
 
         print()
 
