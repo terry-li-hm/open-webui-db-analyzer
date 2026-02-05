@@ -14,6 +14,7 @@ Commands:
     usage       - Per-user per-month chat counts
     models      - Model usage statistics
     feedback    - Thumbs up/down feedback statistics
+    plot        - Generate trend chart (usage + accuracy over time)
     changes     - Recent config changes (models, knowledge, functions, tools, files)
     verify      - Verify data accuracy with cross-checks and samples
     compare     - Compare DB against Open WebUI JSON export (requires --export-file)
@@ -1516,6 +1517,140 @@ class OpenWebUIAnalyzer:
         print("Verification complete. Review sample data to confirm rating parsing.")
         print("=" * 70)
 
+    def plot_trends(self, output_path: str = None):
+        """Generate a dual-axis chart showing monthly usage and accuracy trends."""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.dates as mdates
+        except ImportError:
+            print("Error: matplotlib required for plotting. Install with: pip install matplotlib")
+            return
+
+        print("=" * 60)
+        print("GENERATING TREND CHART")
+        print("=" * 60)
+
+        # Collect monthly stats
+        self.cursor.execute("SELECT user_id, data, created_at FROM feedback")
+
+        monthly_stats = defaultdict(lambda: {'up': 0, 'down': 0, 'total': 0})
+
+        for row in self.cursor.fetchall():
+            ts = row['created_at']
+            if not ts:
+                continue
+            dt = self._parse_timestamp(ts)
+            if not dt:
+                continue
+
+            month_key = dt.strftime('%Y-%m')
+
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                rating = data.get('rating')
+
+                is_up = False
+                is_down = False
+
+                if isinstance(rating, (int, float)):
+                    if rating > 0:
+                        is_up = True
+                    elif rating < 0:
+                        is_down = True
+                elif isinstance(rating, str):
+                    rating_lower = rating.lower()
+                    if rating_lower in ('1', 'like', 'positive', 'up', 'good', 'yes'):
+                        is_up = True
+                    elif rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no'):
+                        is_down = True
+
+                monthly_stats[month_key]['total'] += 1
+                if is_up:
+                    monthly_stats[month_key]['up'] += 1
+                elif is_down:
+                    monthly_stats[month_key]['down'] += 1
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if not monthly_stats:
+            print("No data to plot.")
+            return
+
+        # Prepare data for plotting
+        months = sorted(monthly_stats.keys())
+        usage = [monthly_stats[m]['total'] for m in months]
+        accuracy = []
+        for m in months:
+            total_rated = monthly_stats[m]['up'] + monthly_stats[m]['down']
+            acc = (monthly_stats[m]['up'] / total_rated * 100) if total_rated > 0 else 0
+            accuracy.append(acc)
+
+        # Convert month strings to datetime for better x-axis formatting
+        month_dates = [datetime.strptime(m, '%Y-%m') for m in months]
+
+        # Create figure with dual y-axes
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+
+        # Usage bars (left axis)
+        color_usage = '#4A90D9'
+        ax1.set_xlabel('Month', fontsize=12)
+        ax1.set_ylabel('Total Usage', color=color_usage, fontsize=12)
+        bars = ax1.bar(month_dates, usage, width=20, color=color_usage, alpha=0.7, label='Usage')
+        ax1.tick_params(axis='y', labelcolor=color_usage)
+        ax1.set_ylim(0, max(usage) * 1.2 if usage else 100)
+
+        # Add value labels on bars
+        for bar, val in zip(bars, usage):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(usage)*0.02,
+                    f'{val:,}', ha='center', va='bottom', fontsize=9, color=color_usage)
+
+        # Accuracy line (right axis)
+        ax2 = ax1.twinx()
+        color_acc = '#E85D75'
+        ax2.set_ylabel('Accuracy %', color=color_acc, fontsize=12)
+        line = ax2.plot(month_dates, accuracy, color=color_acc, linewidth=2.5, marker='o',
+                       markersize=8, label='Accuracy')
+        ax2.tick_params(axis='y', labelcolor=color_acc)
+        ax2.set_ylim(0, 105)
+
+        # Add value labels on line points
+        for x, y in zip(month_dates, accuracy):
+            ax2.annotate(f'{y:.0f}%', (x, y), textcoords="offset points",
+                        xytext=(0, 10), ha='center', fontsize=9, color=color_acc, fontweight='bold')
+
+        # Format x-axis
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax1.xaxis.set_major_locator(mdates.MonthLocator())
+        plt.xticks(rotation=45)
+
+        # Title and legend
+        plt.title('Agent-Assist Chatbot: Monthly Usage & Accuracy Trends', fontsize=14, fontweight='bold')
+
+        # Combined legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+
+        plt.tight_layout()
+
+        # Save or show
+        if output_path is None:
+            output_path = 'chatbot_trends.png'
+
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"\n✓ Chart saved to: {output_path}")
+
+        # Also print the data table
+        print(f"\n{'Month':<10} {'Usage':>8} {'👍':>6} {'👎':>5} {'Accuracy':>10}")
+        print("-" * 45)
+        for m in months:
+            stats = monthly_stats[m]
+            total_rated = stats['up'] + stats['down']
+            acc = (stats['up'] / total_rated * 100) if total_rated > 0 else 0
+            print(f"{m:<10} {stats['total']:>8,} {stats['up']:>6,} {stats['down']:>5,} {acc:>9.1f}%")
+
+        print()
+
     def compare_export(self, export_path: str):
         """Compare database analysis against Open WebUI JSON export for verification."""
         print("=" * 70)
@@ -1670,6 +1805,7 @@ Commands:
   usage     - Per-user per-month chat counts
   models    - Model usage statistics
   feedback  - Thumbs up/down feedback statistics
+  plot      - Generate trend chart (usage + accuracy over time)
   report    - Concise report for Simon (usage + accuracy by month)
   changes   - Recent config changes (models, knowledge, functions, tools, files)
   verify    - Verify data accuracy with cross-checks
@@ -1680,7 +1816,7 @@ Commands:
     )
     parser.add_argument('db_path', help='Path to webui.db file')
     parser.add_argument('command', nargs='?', default='summary',
-                        choices=['summary', 'chats', 'users', 'timeline', 'usage', 'models', 'feedback', 'report', 'changes', 'verify', 'compare', 'export', 'all'],
+                        choices=['summary', 'chats', 'users', 'timeline', 'usage', 'models', 'feedback', 'plot', 'report', 'changes', 'verify', 'compare', 'export', 'all'],
                         help='Command to run (default: summary)')
     parser.add_argument('--all-users', '-a', action='store_true',
                         help='Show all users (default: hide users with <500 chats)')
@@ -1718,6 +1854,8 @@ Commands:
                 analyzer.model_usage()
             elif args.command == 'feedback':
                 analyzer.feedback_stats(min_chats=min_chats)
+            elif args.command == 'plot':
+                analyzer.plot_trends(args.output)
             elif args.command == 'report':
                 analyzer.report(month=args.month)
             elif args.command == 'changes':
