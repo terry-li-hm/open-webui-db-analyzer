@@ -1517,13 +1517,18 @@ class OpenWebUIAnalyzer:
         print("Verification complete. Review sample data to confirm rating parsing.")
         print("=" * 70)
 
-    def plot_trends(self, output_path: str = None, include_current_month: bool = False):
+    def plot_trends(self, output_path: str = None, include_current_month: bool = False,
+                    start_month: str = None):
         """Generate a dual-axis chart showing monthly usage and accuracy trends.
 
         Args:
             output_path: Path to save PNG. Defaults to 'chatbot_trends.png'.
             include_current_month: If False (default), excludes the current incomplete month.
+            start_month: Only include months >= this (format: YYYY-MM). Default: 2025-08.
         """
+        # Default to Aug 2025 (pilot start)
+        if start_month is None:
+            start_month = '2025-08'
         try:
             import matplotlib.pyplot as plt
             import matplotlib.dates as mdates
@@ -1594,6 +1599,13 @@ class OpenWebUIAnalyzer:
         if not include_current_month and current_month in monthly_stats:
             del monthly_stats[current_month]
             print(f"(Excluding current month {current_month} - use --include-current to include)")
+
+        # Filter to start_month onwards
+        months_to_remove = [m for m in monthly_stats.keys() if m < start_month]
+        for m in months_to_remove:
+            del monthly_stats[m]
+        if months_to_remove:
+            print(f"(Showing {start_month} onwards - use --start-month to change)")
 
         if not monthly_stats:
             print("No complete months to plot.")
@@ -1888,6 +1900,8 @@ Commands:
                         help='Show debug info for parse errors and unknown values')
     parser.add_argument('--include-current', action='store_true',
                         help='Include current (incomplete) month in plot (default: exclude)')
+    parser.add_argument('--start-month', default='2025-08',
+                        help='Start month for plot (YYYY-MM, default: 2025-08)')
 
     args = parser.parse_args()
 
@@ -1912,7 +1926,8 @@ Commands:
             elif args.command == 'feedback':
                 analyzer.feedback_stats(min_chats=min_chats)
             elif args.command == 'plot':
-                analyzer.plot_trends(args.output, include_current_month=args.include_current)
+                analyzer.plot_trends(args.output, include_current_month=args.include_current,
+                                    start_month=args.start_month)
             elif args.command == 'report':
                 analyzer.report(month=args.month)
             elif args.command == 'changes':
