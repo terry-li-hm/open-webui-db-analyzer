@@ -1549,11 +1549,25 @@ class OpenWebUIAnalyzer:
         # Get current month to exclude if needed
         current_month = datetime.now().strftime('%Y-%m')
 
-        # Collect monthly stats
-        self.cursor.execute("SELECT user_id, data, created_at FROM feedback")
+        # Collect monthly stats from TWO sources:
+        # 1. Total conversations from chat table (for bars)
+        # 2. Accuracy from feedback table (for line)
 
-        monthly_stats = defaultdict(lambda: {'up': 0, 'down': 0, 'total': 0})
+        monthly_stats = defaultdict(lambda: {'chats': 0, 'up': 0, 'down': 0})
 
+        # Count all chats per month
+        self.cursor.execute("SELECT created_at FROM chat")
+        for row in self.cursor.fetchall():
+            ts = row['created_at']
+            if not ts:
+                continue
+            dt = self._parse_timestamp(ts)
+            if dt:
+                month_key = dt.strftime('%Y-%m')
+                monthly_stats[month_key]['chats'] += 1
+
+        # Count feedback (thumbs up/down) per month for accuracy
+        self.cursor.execute("SELECT data, created_at FROM feedback")
         for row in self.cursor.fetchall():
             ts = row['created_at']
             if not ts:
@@ -1568,26 +1582,17 @@ class OpenWebUIAnalyzer:
                 data = json.loads(row['data']) if row['data'] else {}
                 rating = data.get('rating')
 
-                is_up = False
-                is_down = False
-
                 if isinstance(rating, (int, float)):
                     if rating > 0:
-                        is_up = True
+                        monthly_stats[month_key]['up'] += 1
                     elif rating < 0:
-                        is_down = True
+                        monthly_stats[month_key]['down'] += 1
                 elif isinstance(rating, str):
                     rating_lower = rating.lower()
                     if rating_lower in ('1', 'like', 'positive', 'up', 'good', 'yes'):
-                        is_up = True
+                        monthly_stats[month_key]['up'] += 1
                     elif rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no'):
-                        is_down = True
-
-                monthly_stats[month_key]['total'] += 1
-                if is_up:
-                    monthly_stats[month_key]['up'] += 1
-                elif is_down:
-                    monthly_stats[month_key]['down'] += 1
+                        monthly_stats[month_key]['down'] += 1
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -1613,7 +1618,7 @@ class OpenWebUIAnalyzer:
 
         # Prepare data for plotting
         months = sorted(monthly_stats.keys())
-        usage = [monthly_stats[m]['total'] for m in months]
+        chats = [monthly_stats[m]['chats'] for m in months]
         accuracy = []
         for m in months:
             total_rated = monthly_stats[m]['up'] + monthly_stats[m]['down']
@@ -1624,9 +1629,9 @@ class OpenWebUIAnalyzer:
         month_dates = [datetime.strptime(m, '%Y-%m') for m in months]
 
         # Professional color scheme (per data viz best practices)
-        # Navy bars + Orange line - high contrast, colorblind safe
-        COLOR_BARS = '#112E51'   # Navy
-        COLOR_LINE = '#FF7043'   # Orange
+        # Teal bars + Coral line - high contrast, colorblind safe, distinct
+        COLOR_BARS = '#0077B6'   # Teal/Blue
+        COLOR_LINE = '#E63946'   # Coral/Red
         COLOR_GRID = '#E8E8E8'   # Light grey
 
         # Set clean style
@@ -1636,16 +1641,17 @@ class OpenWebUIAnalyzer:
         # Create figure with dual y-axes
         fig, ax1 = plt.subplots(figsize=(11, 5))
 
-        # === LEFT AXIS: Usage bars ===
-        ax1.set_ylabel('Usage (requests)', color=COLOR_BARS, fontsize=11, fontweight='semibold')
-        bars = ax1.bar(month_dates, usage, width=18, color=COLOR_BARS, alpha=0.9,
+        # === LEFT AXIS: Conversation bars ===
+        ax1.set_ylabel('Conversations', color=COLOR_BARS, fontsize=11, fontweight='semibold')
+        bars = ax1.bar(month_dates, chats, width=18, color=COLOR_BARS, alpha=0.85,
                       edgecolor='white', linewidth=0.8)
         ax1.tick_params(axis='y', labelcolor=COLOR_BARS, labelsize=10)
-        ax1.set_ylim(0, max(usage) * 1.2 if usage else 100)
+        ax1.set_ylim(0, max(chats) * 1.25 if chats else 100)
 
         # Value labels on bars (above)
-        for bar, val in zip(bars, usage):
-            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(usage)*0.015,
+        max_chats = max(chats) if chats else 1
+        for bar, val in zip(bars, chats):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max_chats*0.02,
                     f'{val:,}', ha='center', va='bottom', fontsize=9, color=COLOR_BARS,
                     fontweight='semibold')
 
@@ -1653,22 +1659,27 @@ class OpenWebUIAnalyzer:
         ax2 = ax1.twinx()
         ax2.set_ylabel('Accuracy (%)', color=COLOR_LINE, fontsize=11, fontweight='semibold')
         ax2.plot(month_dates, accuracy, color=COLOR_LINE, linewidth=2.5, marker='o',
-                markersize=8, markerfacecolor='white', markeredgecolor=COLOR_LINE,
-                markeredgewidth=2, zorder=5)
+                markersize=9, markerfacecolor='white', markeredgecolor=COLOR_LINE,
+                markeredgewidth=2.5, zorder=5)
         ax2.tick_params(axis='y', labelcolor=COLOR_LINE, labelsize=10)
         ax2.set_ylim(0, 105)
 
-        # Value labels on line - only first, last, and any notable changes
+        # Value labels on line - only first, last, and notable changes
+        # Use background box to prevent overlap with bars
         for i, (x, y) in enumerate(zip(month_dates, accuracy)):
-            # Label first, last, and any significant changes (>5% from previous)
             is_first = (i == 0)
             is_last = (i == len(accuracy) - 1)
             is_notable = (i > 0 and abs(y - accuracy[i-1]) > 5)
 
             if is_first or is_last or is_notable:
+                # Place label below line if accuracy > 85% to avoid top crowding
+                offset_y = -15 if y > 85 else 12
+                va = 'top' if y > 85 else 'bottom'
                 ax2.annotate(f'{y:.0f}%', (x, y), textcoords="offset points",
-                            xytext=(0, 10), ha='center', fontsize=9, color=COLOR_LINE,
-                            fontweight='bold')
+                            xytext=(0, offset_y), ha='center', va=va,
+                            fontsize=9, color=COLOR_LINE, fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.2', facecolor='white',
+                                     edgecolor='none', alpha=0.8))
 
         # === STYLING: Minimal, professional ===
         # Horizontal gridlines only (behind data)
@@ -1691,8 +1702,8 @@ class OpenWebUIAnalyzer:
         ax1.tick_params(axis='x', labelsize=10)
         plt.xticks(rotation=0)  # Keep horizontal for readability
 
-        # Title (concise, above chart)
-        ax1.set_title('Agent-Assist Chatbot: Usage & Accuracy Trends',
+        # Title
+        ax1.set_title('Agent-Assist Chatbot: Conversations & Accuracy',
                      fontsize=13, fontweight='bold', pad=15, loc='left')
 
         # No legend needed - axis colors indicate which is which
@@ -1708,13 +1719,13 @@ class OpenWebUIAnalyzer:
         print(f"\n✓ Chart saved to: {output_path}")
 
         # Also print the data table
-        print(f"\n{'Month':<10} {'Usage':>8} {'👍':>6} {'👎':>5} {'Accuracy':>10}")
+        print(f"\n{'Month':<10} {'Chats':>8} {'👍':>6} {'👎':>5} {'Accuracy':>10}")
         print("-" * 45)
         for m in months:
             stats = monthly_stats[m]
             total_rated = stats['up'] + stats['down']
             acc = (stats['up'] / total_rated * 100) if total_rated > 0 else 0
-            print(f"{m:<10} {stats['total']:>8,} {stats['up']:>6,} {stats['down']:>5,} {acc:>9.1f}%")
+            print(f"{m:<10} {stats['chats']:>8,} {stats['up']:>6,} {stats['down']:>5,} {acc:>9.1f}%")
 
         print()
 
