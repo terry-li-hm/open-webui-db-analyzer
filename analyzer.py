@@ -1527,8 +1527,14 @@ class OpenWebUIAnalyzer:
         try:
             import matplotlib.pyplot as plt
             import matplotlib.dates as mdates
+            try:
+                import seaborn as sns
+                sns.set_theme(style="whitegrid", palette="muted")
+                has_seaborn = True
+            except ImportError:
+                has_seaborn = False
         except ImportError:
-            print("Error: matplotlib required for plotting. Install with: pip install matplotlib")
+            print("Error: matplotlib required for plotting. Install with: pip install matplotlib seaborn")
             return
 
         print("=" * 60)
@@ -1605,48 +1611,64 @@ class OpenWebUIAnalyzer:
         # Convert month strings to datetime for better x-axis formatting
         month_dates = [datetime.strptime(m, '%Y-%m') for m in months]
 
+        # Use seaborn palette if available
+        if has_seaborn:
+            palette = sns.color_palette("deep")
+            color_usage = palette[0]  # Blue
+            color_acc = palette[3]    # Red/coral
+        else:
+            color_usage = '#4A90D9'
+            color_acc = '#E85D75'
+
         # Create figure with dual y-axes
         fig, ax1 = plt.subplots(figsize=(12, 6))
 
         # Usage bars (left axis)
-        color_usage = '#4A90D9'
-        ax1.set_xlabel('Month', fontsize=12)
-        ax1.set_ylabel('Total Usage', color=color_usage, fontsize=12)
-        bars = ax1.bar(month_dates, usage, width=20, color=color_usage, alpha=0.7, label='Usage')
+        ax1.set_xlabel('Month', fontsize=12, fontweight='medium')
+        ax1.set_ylabel('Total Usage', color=color_usage, fontsize=12, fontweight='medium')
+        bars = ax1.bar(month_dates, usage, width=20, color=color_usage, alpha=0.8, label='Usage',
+                      edgecolor='white', linewidth=0.5)
         ax1.tick_params(axis='y', labelcolor=color_usage)
-        ax1.set_ylim(0, max(usage) * 1.2 if usage else 100)
+        ax1.set_ylim(0, max(usage) * 1.25 if usage else 100)
 
         # Add value labels on bars
         for bar, val in zip(bars, usage):
             ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(usage)*0.02,
-                    f'{val:,}', ha='center', va='bottom', fontsize=9, color=color_usage)
+                    f'{val:,}', ha='center', va='bottom', fontsize=10, color=color_usage,
+                    fontweight='bold')
 
         # Accuracy line (right axis)
         ax2 = ax1.twinx()
-        color_acc = '#E85D75'
-        ax2.set_ylabel('Accuracy %', color=color_acc, fontsize=12)
-        line = ax2.plot(month_dates, accuracy, color=color_acc, linewidth=2.5, marker='o',
-                       markersize=8, label='Accuracy')
+        ax2.set_ylabel('Accuracy %', color=color_acc, fontsize=12, fontweight='medium')
+        line = ax2.plot(month_dates, accuracy, color=color_acc, linewidth=3, marker='o',
+                       markersize=10, label='Accuracy', markerfacecolor='white',
+                       markeredgecolor=color_acc, markeredgewidth=2)
         ax2.tick_params(axis='y', labelcolor=color_acc)
         ax2.set_ylim(0, 105)
 
         # Add value labels on line points
         for x, y in zip(month_dates, accuracy):
             ax2.annotate(f'{y:.0f}%', (x, y), textcoords="offset points",
-                        xytext=(0, 10), ha='center', fontsize=9, color=color_acc, fontweight='bold')
+                        xytext=(0, 12), ha='center', fontsize=10, color=color_acc, fontweight='bold')
 
         # Format x-axis
-        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
         ax1.xaxis.set_major_locator(mdates.MonthLocator())
-        plt.xticks(rotation=45)
+        plt.xticks(rotation=45, ha='right')
 
         # Title and legend
-        plt.title('Agent-Assist Chatbot: Monthly Usage & Accuracy Trends', fontsize=14, fontweight='bold')
+        fig.suptitle('Agent-Assist Chatbot: Monthly Usage & Accuracy Trends',
+                    fontsize=14, fontweight='bold', y=1.02)
 
-        # Combined legend
+        # Combined legend - positioned better
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left',
+                  framealpha=0.9, edgecolor='lightgray')
+
+        # Remove top and right spines for cleaner look
+        ax1.spines['top'].set_visible(False)
+        ax2.spines['top'].set_visible(False)
 
         plt.tight_layout()
 
@@ -1654,7 +1676,7 @@ class OpenWebUIAnalyzer:
         if output_path is None:
             output_path = 'chatbot_trends.png'
 
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='white')
         print(f"\n✓ Chart saved to: {output_path}")
 
         # Also print the data table
