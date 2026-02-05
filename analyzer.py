@@ -27,6 +27,8 @@ Options:
     --debug         Show debug info for parse errors and unknown rating values
 """
 
+from __future__ import annotations
+
 import sqlite3
 import json
 import sys
