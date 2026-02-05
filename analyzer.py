@@ -1069,6 +1069,148 @@ class OpenWebUIAnalyzer:
 
         print()
 
+    def report(self, month: str = None, history_months: int = 6):
+        """Generate concise report for Simon (MC Weekly / ITG Meeting).
+
+        Args:
+            month: Target month in YYYY-MM format. Defaults to last complete month.
+            history_months: Number of months of history to show (default: 6).
+        """
+        from datetime import date
+
+        # Determine target month
+        if month:
+            target_month = month
+        else:
+            # Default to last complete month
+            today = date.today()
+            if today.month == 1:
+                target_month = f"{today.year - 1}-12"
+            else:
+                target_month = f"{today.year}-{today.month - 1:02d}"
+
+        print("=" * 60)
+        print(f"AGENT-ASSIST REPORT")
+        print("=" * 60)
+
+        # Get user names
+        self.cursor.execute("SELECT id, name, email FROM user")
+        user_names = {}
+        for row in self.cursor.fetchall():
+            user_names[row['id']] = row['name'] or row['email'] or row['id']
+
+        # Collect all feedback by month and user
+        monthly_stats = defaultdict(lambda: {'up': 0, 'down': 0})
+        user_monthly_stats = defaultdict(lambda: defaultdict(lambda: {'up': 0, 'down': 0}))
+
+        self.cursor.execute("SELECT user_id, data, created_at FROM feedback")
+
+        for row in self.cursor.fetchall():
+            ts = row['created_at']
+            if not ts:
+                continue
+            dt = self._parse_timestamp(ts)
+            if not dt:
+                continue
+
+            row_month = dt.strftime('%Y-%m')
+
+            try:
+                data = json.loads(row['data']) if row['data'] else {}
+                rating = data.get('rating')
+                user_id = row['user_id']
+
+                is_up = False
+                is_down = False
+
+                if isinstance(rating, (int, float)):
+                    if rating > 0:
+                        is_up = True
+                    elif rating < 0:
+                        is_down = True
+                elif isinstance(rating, str):
+                    rating_lower = rating.lower()
+                    if rating_lower in ('1', 'like', 'positive', 'up', 'good', 'yes'):
+                        is_up = True
+                    elif rating_lower in ('-1', 'dislike', 'negative', 'down', 'bad', 'no'):
+                        is_down = True
+
+                if is_up:
+                    monthly_stats[row_month]['up'] += 1
+                    user_monthly_stats[user_id][row_month]['up'] += 1
+                elif is_down:
+                    monthly_stats[row_month]['down'] += 1
+                    user_monthly_stats[user_id][row_month]['down'] += 1
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Get sorted months, last N
+        all_months = sorted(monthly_stats.keys())
+        display_months = all_months[-history_months:]
+
+        # Monthly summary table
+        print(f"\n{'Month':<10} {'Usage':>8} {'👍':>6} {'👎':>5} {'Accuracy':>10}")
+        print("-" * 45)
+        for m in display_months:
+            stats = monthly_stats[m]
+            total = stats['up'] + stats['down']
+            acc = (stats['up'] / total * 100) if total > 0 else 0
+            print(f"{m:<10} {total:>8,} {stats['up']:>6,} {stats['down']:>5,} {acc:>9.1f}%")
+
+        # Highlight latest month
+        if display_months:
+            latest = display_months[-1]
+            latest_stats = monthly_stats[latest]
+            latest_total = latest_stats['up'] + latest_stats['down']
+            latest_acc = (latest_stats['up'] / latest_total * 100) if latest_total > 0 else 0
+
+            # Find first month for comparison
+            first = display_months[0]
+            first_stats = monthly_stats[first]
+            first_total = first_stats['up'] + first_stats['down']
+            first_acc = (first_stats['up'] / first_total * 100) if first_total > 0 else 0
+
+            print("-" * 45)
+            print(f"\n📊 Summary ({first} → {latest}):")
+            print(f"   Usage:    {first_total:,} → {latest_total:,}")
+            print(f"   Accuracy: {first_acc:.0f}% → {latest_acc:.0f}%")
+
+        # Per-user breakdown for latest month
+        if display_months:
+            latest = display_months[-1]
+            print(f"\n{'User':<20} ", end="")
+            for m in display_months[-4:]:  # Last 4 months
+                print(f"{m[-5:]:>12}", end="")
+            print()
+            print("-" * (20 + 12 * min(4, len(display_months))))
+
+            # Get users with activity in latest month
+            active_users = []
+            for user_id, months_data in user_monthly_stats.items():
+                if latest in months_data:
+                    latest_total = months_data[latest]['up'] + months_data[latest]['down']
+                    active_users.append((user_id, latest_total))
+
+            # Sort by latest month usage
+            active_users.sort(key=lambda x: -x[1])
+
+            for user_id, _ in active_users:
+                name = user_names.get(user_id, user_id or '(unknown)')
+                name = name[:19] if name else '(unknown)'
+                print(f"{name:<20} ", end="")
+
+                for m in display_months[-4:]:
+                    stats = user_monthly_stats[user_id].get(m, {'up': 0, 'down': 0})
+                    total = stats['up'] + stats['down']
+                    if total > 0:
+                        acc = stats['up'] / total * 100
+                        print(f"{total:>5} ({acc:>4.0f}%)", end="")
+                    else:
+                        print(f"{'--':>12}", end="")
+                print()
+
+        print()
+
     def export_chats(self, output_path: str = None):
         """Export all chats to JSON."""
         if output_path is None:
@@ -1526,6 +1668,7 @@ Commands:
   usage     - Per-user per-month chat counts
   models    - Model usage statistics
   feedback  - Thumbs up/down feedback statistics
+  report    - Concise report for Simon (usage + accuracy by month)
   changes   - Recent config changes (models, knowledge, functions, tools, files)
   verify    - Verify data accuracy with cross-checks
   compare   - Compare DB against Open WebUI JSON export
@@ -1535,7 +1678,7 @@ Commands:
     )
     parser.add_argument('db_path', help='Path to webui.db file')
     parser.add_argument('command', nargs='?', default='summary',
-                        choices=['summary', 'chats', 'users', 'timeline', 'usage', 'models', 'feedback', 'changes', 'verify', 'compare', 'export', 'all'],
+                        choices=['summary', 'chats', 'users', 'timeline', 'usage', 'models', 'feedback', 'report', 'changes', 'verify', 'compare', 'export', 'all'],
                         help='Command to run (default: summary)')
     parser.add_argument('--all-users', '-a', action='store_true',
                         help='Show all users (default: hide users with <500 chats)')
@@ -1547,6 +1690,7 @@ Commands:
                         help='Months to display for usage command (default: 9)')
     parser.add_argument('--export-file', '-e', help='Open WebUI feedback JSON export (for compare command)')
     parser.add_argument('--output', '-o', help='Output file for export command')
+    parser.add_argument('--month', help='Target month for report command (YYYY-MM, default: last complete month)')
     parser.add_argument('--debug', '-d', action='store_true',
                         help='Show debug info for parse errors and unknown values')
 
@@ -1572,6 +1716,8 @@ Commands:
                 analyzer.model_usage()
             elif args.command == 'feedback':
                 analyzer.feedback_stats(min_chats=min_chats)
+            elif args.command == 'report':
+                analyzer.report(month=args.month)
             elif args.command == 'changes':
                 analyzer.recent_changes(days=args.days)
             elif args.command == 'verify':
