@@ -1671,14 +1671,17 @@ class OpenWebUIAnalyzer:
         ax2.tick_params(axis='y', labelcolor=COLOR_LINE, labelsize=10)
         ax2.set_ylim(0, 105)
 
-        # Value labels on line - only first, last, and notable changes
+        # Value labels on line - show all when ≤12 months, otherwise selective
         # Use background box to prevent overlap with bars
         for i, (x, y) in enumerate(zip(valid_dates, valid_accuracy)):
-            is_first = (i == 0)
-            is_last = (i == len(valid_accuracy) - 1)
-            is_notable = (i > 0 and abs(y - valid_accuracy[i-1]) > 5)
+            show_label = len(valid_accuracy) <= 12  # Show all for small datasets
+            if not show_label:
+                is_first = (i == 0)
+                is_last = (i == len(valid_accuracy) - 1)
+                is_notable = (i > 0 and abs(y - valid_accuracy[i-1]) > 5)
+                show_label = is_first or is_last or is_notable
 
-            if is_first or is_last or is_notable:
+            if show_label:
                 # Place label below line if accuracy > 85% to avoid top crowding
                 offset_y = -15 if y > 85 else 12
                 va = 'top' if y > 85 else 'bottom'
