@@ -1517,8 +1517,13 @@ class OpenWebUIAnalyzer:
         print("Verification complete. Review sample data to confirm rating parsing.")
         print("=" * 70)
 
-    def plot_trends(self, output_path: str = None):
-        """Generate a dual-axis chart showing monthly usage and accuracy trends."""
+    def plot_trends(self, output_path: str = None, include_current_month: bool = False):
+        """Generate a dual-axis chart showing monthly usage and accuracy trends.
+
+        Args:
+            output_path: Path to save PNG. Defaults to 'chatbot_trends.png'.
+            include_current_month: If False (default), excludes the current incomplete month.
+        """
         try:
             import matplotlib.pyplot as plt
             import matplotlib.dates as mdates
@@ -1529,6 +1534,9 @@ class OpenWebUIAnalyzer:
         print("=" * 60)
         print("GENERATING TREND CHART")
         print("=" * 60)
+
+        # Get current month to exclude if needed
+        current_month = datetime.now().strftime('%Y-%m')
 
         # Collect monthly stats
         self.cursor.execute("SELECT user_id, data, created_at FROM feedback")
@@ -1574,6 +1582,15 @@ class OpenWebUIAnalyzer:
 
         if not monthly_stats:
             print("No data to plot.")
+            return
+
+        # Exclude current incomplete month unless explicitly included
+        if not include_current_month and current_month in monthly_stats:
+            del monthly_stats[current_month]
+            print(f"(Excluding current month {current_month} - use --include-current to include)")
+
+        if not monthly_stats:
+            print("No complete months to plot.")
             return
 
         # Prepare data for plotting
@@ -1831,6 +1848,8 @@ Commands:
     parser.add_argument('--month', help='Target month for report command (YYYY-MM, default: last complete month)')
     parser.add_argument('--debug', '-d', action='store_true',
                         help='Show debug info for parse errors and unknown values')
+    parser.add_argument('--include-current', action='store_true',
+                        help='Include current (incomplete) month in plot (default: exclude)')
 
     args = parser.parse_args()
 
@@ -1855,7 +1874,7 @@ Commands:
             elif args.command == 'feedback':
                 analyzer.feedback_stats(min_chats=min_chats)
             elif args.command == 'plot':
-                analyzer.plot_trends(args.output)
+                analyzer.plot_trends(args.output, include_current_month=args.include_current)
             elif args.command == 'report':
                 analyzer.report(month=args.month)
             elif args.command == 'changes':
