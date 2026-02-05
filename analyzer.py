@@ -1611,72 +1611,88 @@ class OpenWebUIAnalyzer:
         # Convert month strings to datetime for better x-axis formatting
         month_dates = [datetime.strptime(m, '%Y-%m') for m in months]
 
-        # Use seaborn palette if available
+        # Professional color scheme (per data viz best practices)
+        # Navy bars + Orange line - high contrast, colorblind safe
+        COLOR_BARS = '#112E51'   # Navy
+        COLOR_LINE = '#FF7043'   # Orange
+        COLOR_GRID = '#E8E8E8'   # Light grey
+
+        # Set clean style
         if has_seaborn:
-            palette = sns.color_palette("deep")
-            color_usage = palette[0]  # Blue
-            color_acc = palette[3]    # Red/coral
-        else:
-            color_usage = '#4A90D9'
-            color_acc = '#E85D75'
+            sns.set_style("white")
 
         # Create figure with dual y-axes
-        fig, ax1 = plt.subplots(figsize=(12, 6))
+        fig, ax1 = plt.subplots(figsize=(11, 5))
 
-        # Usage bars (left axis)
-        ax1.set_xlabel('Month', fontsize=12, fontweight='medium')
-        ax1.set_ylabel('Total Usage', color=color_usage, fontsize=12, fontweight='medium')
-        bars = ax1.bar(month_dates, usage, width=20, color=color_usage, alpha=0.8, label='Usage',
-                      edgecolor='white', linewidth=0.5)
-        ax1.tick_params(axis='y', labelcolor=color_usage)
-        ax1.set_ylim(0, max(usage) * 1.25 if usage else 100)
+        # === LEFT AXIS: Usage bars ===
+        ax1.set_ylabel('Usage (requests)', color=COLOR_BARS, fontsize=11, fontweight='semibold')
+        bars = ax1.bar(month_dates, usage, width=18, color=COLOR_BARS, alpha=0.9,
+                      edgecolor='white', linewidth=0.8)
+        ax1.tick_params(axis='y', labelcolor=COLOR_BARS, labelsize=10)
+        ax1.set_ylim(0, max(usage) * 1.2 if usage else 100)
 
-        # Add value labels on bars
+        # Value labels on bars (above)
         for bar, val in zip(bars, usage):
-            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(usage)*0.02,
-                    f'{val:,}', ha='center', va='bottom', fontsize=10, color=color_usage,
-                    fontweight='bold')
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(usage)*0.015,
+                    f'{val:,}', ha='center', va='bottom', fontsize=9, color=COLOR_BARS,
+                    fontweight='semibold')
 
-        # Accuracy line (right axis)
+        # === RIGHT AXIS: Accuracy line ===
         ax2 = ax1.twinx()
-        ax2.set_ylabel('Accuracy %', color=color_acc, fontsize=12, fontweight='medium')
-        line = ax2.plot(month_dates, accuracy, color=color_acc, linewidth=3, marker='o',
-                       markersize=10, label='Accuracy', markerfacecolor='white',
-                       markeredgecolor=color_acc, markeredgewidth=2)
-        ax2.tick_params(axis='y', labelcolor=color_acc)
+        ax2.set_ylabel('Accuracy (%)', color=COLOR_LINE, fontsize=11, fontweight='semibold')
+        ax2.plot(month_dates, accuracy, color=COLOR_LINE, linewidth=2.5, marker='o',
+                markersize=8, markerfacecolor='white', markeredgecolor=COLOR_LINE,
+                markeredgewidth=2, zorder=5)
+        ax2.tick_params(axis='y', labelcolor=COLOR_LINE, labelsize=10)
         ax2.set_ylim(0, 105)
 
-        # Add value labels on line points
-        for x, y in zip(month_dates, accuracy):
-            ax2.annotate(f'{y:.0f}%', (x, y), textcoords="offset points",
-                        xytext=(0, 12), ha='center', fontsize=10, color=color_acc, fontweight='bold')
+        # Value labels on line - only first, last, and any notable changes
+        for i, (x, y) in enumerate(zip(month_dates, accuracy)):
+            # Label first, last, and any significant changes (>5% from previous)
+            is_first = (i == 0)
+            is_last = (i == len(accuracy) - 1)
+            is_notable = (i > 0 and abs(y - accuracy[i-1]) > 5)
 
-        # Format x-axis
+            if is_first or is_last or is_notable:
+                ax2.annotate(f'{y:.0f}%', (x, y), textcoords="offset points",
+                            xytext=(0, 10), ha='center', fontsize=9, color=COLOR_LINE,
+                            fontweight='bold')
+
+        # === STYLING: Minimal, professional ===
+        # Horizontal gridlines only (behind data)
+        ax1.grid(axis='y', color=COLOR_GRID, linewidth=0.5, zorder=0)
+        ax1.set_axisbelow(True)
+
+        # Remove all spines except bottom
+        for spine in ['top', 'right']:
+            ax1.spines[spine].set_visible(False)
+        ax1.spines['left'].set_color(COLOR_BARS)
+        ax1.spines['left'].set_linewidth(1.5)
+        ax2.spines['top'].set_visible(False)
+        ax2.spines['right'].set_color(COLOR_LINE)
+        ax2.spines['right'].set_linewidth(1.5)
+        ax2.spines['left'].set_visible(False)
+
+        # X-axis formatting
         ax1.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
         ax1.xaxis.set_major_locator(mdates.MonthLocator())
-        plt.xticks(rotation=45, ha='right')
+        ax1.tick_params(axis='x', labelsize=10)
+        plt.xticks(rotation=0)  # Keep horizontal for readability
 
-        # Title and legend
-        fig.suptitle('Agent-Assist Chatbot: Monthly Usage & Accuracy Trends',
-                    fontsize=14, fontweight='bold', y=1.02)
+        # Title (concise, above chart)
+        ax1.set_title('Agent-Assist Chatbot: Usage & Accuracy Trends',
+                     fontsize=13, fontweight='bold', pad=15, loc='left')
 
-        # Combined legend - positioned better
-        lines1, labels1 = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left',
-                  framealpha=0.9, edgecolor='lightgray')
-
-        # Remove top and right spines for cleaner look
-        ax1.spines['top'].set_visible(False)
-        ax2.spines['top'].set_visible(False)
+        # No legend needed - axis colors indicate which is which
 
         plt.tight_layout()
 
-        # Save or show
+        # Save
         if output_path is None:
             output_path = 'chatbot_trends.png'
 
-        plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='white')
+        plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='white',
+                   edgecolor='none')
         print(f"\n✓ Chart saved to: {output_path}")
 
         # Also print the data table
